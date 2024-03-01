@@ -16,7 +16,7 @@ from dontmanageerp.support.doctype.service_level_agreement.service_level_agreeme
 class TestServiceLevelAgreement(unittest.TestCase):
 	def setUp(self):
 		self.create_company()
-		dontmanage.db.set_value("Support Settings", None, "track_service_level_agreement", 1)
+		dontmanage.db.set_single_value("Support Settings", "track_service_level_agreement", 1)
 		lead = dontmanage.qb.DocType("Lead")
 		dontmanage.qb.from_(lead).delete().where(lead.company == self.company).run()
 

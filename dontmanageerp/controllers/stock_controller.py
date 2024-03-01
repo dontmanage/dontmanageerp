@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import List, Tuple
 
 import dontmanage
-from dontmanage import _
+from dontmanage import _, bold
 from dontmanage.utils import cint, cstr, flt, get_link_to_form, getdate
 
 import dontmanageerp
@@ -15,11 +15,14 @@ from dontmanageerp.accounts.general_ledger import (
 	make_reverse_gl_entries,
 	process_gl_map,
 )
-from dontmanageerp.accounts.utils import get_fiscal_year
+from dontmanageerp.accounts.utils import cancel_exchange_gain_loss_journal, get_fiscal_year
 from dontmanageerp.controllers.accounts_controller import AccountsController
 from dontmanageerp.stock import get_warehouse_account_map
 from dontmanageerp.stock.doctype.inventory_dimension.inventory_dimension import (
 	get_evaluated_inventory_dimension,
+)
+from dontmanageerp.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+	get_type_of_transaction,
 )
 from dontmanageerp.stock.stock_ledger import get_items_to_be_repost
 
@@ -43,6 +46,9 @@ class BatchExpiredError(dontmanage.ValidationError):
 class StockController(AccountsController):
 	def validate(self):
 		super(StockController, self).validate()
+
+		if self.docstatus == 0:
+			self.validate_duplicate_serial_and_batch_bundle()
 		if not self.get("is_return"):
 			self.validate_inspection()
 		self.validate_serialized_batch()
@@ -51,6 +57,32 @@ class StockController(AccountsController):
 		self.set_rate_of_stock_uom()
 		self.validate_internal_transfer()
 		self.validate_putaway_capacity()
+
+	def validate_duplicate_serial_and_batch_bundle(self):
+		if sbb_list := [
+			item.get("serial_and_batch_bundle")
+			for item in self.items
+			if item.get("serial_and_batch_bundle")
+		]:
+			SLE = dontmanage.qb.DocType("Stock Ledger Entry")
+			data = (
+				dontmanage.qb.from_(SLE)
+				.select(SLE.voucher_type, SLE.voucher_no, SLE.serial_and_batch_bundle)
+				.where(
+					(SLE.docstatus == 1)
+					& (SLE.serial_and_batch_bundle.notnull())
+					& (SLE.serial_and_batch_bundle.isin(sbb_list))
+				)
+				.limit(1)
+			).run(as_dict=True)
+
+			if data:
+				data = data[0]
+				dontmanage.throw(
+					_("Serial and Batch Bundle {0} is already used in {1} {2}.").format(
+						dontmanage.bold(data.serial_and_batch_bundle), data.voucher_type, data.voucher_no
+					)
+				)
 
 	def make_gl_entries(self, gl_entries=None, from_repost=False):
 		if self.docstatus == 2:
@@ -62,9 +94,12 @@ class StockController(AccountsController):
 			)
 		)
 
+		is_asset_pr = any(d.get("is_fixed_asset") for d in self.get("items"))
+
 		if (
 			cint(dontmanageerp.is_perpetual_inventory_enabled(self.company))
 			or provisional_accounting_for_non_stock_items
+			or is_asset_pr
 		):
 			warehouse_account = get_warehouse_account_map(self.company)
 
@@ -72,11 +107,6 @@ class StockController(AccountsController):
 				if not gl_entries:
 					gl_entries = self.get_gl_entries(warehouse_account)
 				make_gl_entries(gl_entries, from_repost=from_repost)
-
-		elif self.doctype in ["Purchase Receipt", "Purchase Invoice"] and self.docstatus == 1:
-			gl_entries = []
-			gl_entries = self.get_asset_gl_entry(gl_entries)
-			make_gl_entries(gl_entries, from_repost=from_repost)
 
 	def validate_serialized_batch(self):
 		from dontmanageerp.stock.doctype.serial_no.serial_no import get_serial_nos
@@ -127,6 +157,131 @@ class StockController(AccountsController):
 			if hasattr(row, "serial_no") and row.serial_no:
 				# remove extra whitespace and store one serial no on each line
 				row.serial_no = clean_serial_no_string(row.serial_no)
+
+	def make_bundle_using_old_serial_batch_fields(self, table_name=None):
+		from dontmanageerp.stock.doctype.serial_no.serial_no import get_serial_nos
+		from dontmanageerp.stock.serial_batch_bundle import SerialBatchCreation
+
+		if self.get("_action") == "update_after_submit":
+			return
+
+		# To handle test cases
+		if dontmanage.flags.in_test and dontmanage.flags.use_serial_and_batch_fields:
+			return
+
+		if not table_name:
+			table_name = "items"
+
+		if self.doctype == "Asset Capitalization":
+			table_name = "stock_items"
+
+		for row in self.get(table_name):
+			if row.serial_and_batch_bundle and (row.serial_no or row.batch_no):
+				self.validate_serial_nos_and_batches_with_bundle(row)
+
+			if not row.serial_no and not row.batch_no and not row.get("rejected_serial_no"):
+				continue
+
+			if not row.use_serial_batch_fields and (
+				row.serial_no or row.batch_no or row.get("rejected_serial_no")
+			):
+				row.use_serial_batch_fields = 1
+
+			if row.use_serial_batch_fields and (
+				not row.serial_and_batch_bundle and not row.get("rejected_serial_and_batch_bundle")
+			):
+				if self.doctype == "Stock Reconciliation":
+					qty = row.qty
+					type_of_transaction = "Inward"
+					warehouse = row.warehouse
+				elif table_name == "packed_items":
+					qty = row.qty
+					warehouse = row.warehouse
+					type_of_transaction = "Outward"
+					if self.is_return:
+						type_of_transaction = "Inward"
+				else:
+					qty = row.stock_qty if self.doctype != "Stock Entry" else row.transfer_qty
+					type_of_transaction = get_type_of_transaction(self, row)
+					warehouse = (
+						row.warehouse if self.doctype != "Stock Entry" else row.s_warehouse or row.t_warehouse
+					)
+
+				sn_doc = SerialBatchCreation(
+					{
+						"item_code": row.item_code,
+						"warehouse": warehouse,
+						"posting_date": self.posting_date,
+						"posting_time": self.posting_time,
+						"voucher_type": self.doctype,
+						"voucher_no": self.name,
+						"voucher_detail_no": row.name,
+						"qty": qty,
+						"type_of_transaction": type_of_transaction,
+						"company": self.company,
+						"is_rejected": 1 if row.get("rejected_warehouse") else 0,
+						"serial_nos": get_serial_nos(row.serial_no) if row.serial_no else None,
+						"batches": dontmanage._dict({row.batch_no: qty}) if row.batch_no else None,
+						"batch_no": row.batch_no,
+						"use_serial_batch_fields": row.use_serial_batch_fields,
+						"do_not_submit": True,
+					}
+				).make_serial_and_batch_bundle()
+
+				if sn_doc.is_rejected:
+					row.rejected_serial_and_batch_bundle = sn_doc.name
+					row.db_set(
+						{
+							"rejected_serial_and_batch_bundle": sn_doc.name,
+						}
+					)
+				else:
+					row.serial_and_batch_bundle = sn_doc.name
+					row.db_set(
+						{
+							"serial_and_batch_bundle": sn_doc.name,
+						}
+					)
+
+	def validate_serial_nos_and_batches_with_bundle(self, row):
+		from dontmanageerp.stock.doctype.serial_no.serial_no import get_serial_nos
+
+		throw_error = False
+		if row.serial_no:
+			serial_nos = dontmanage.get_all(
+				"Serial and Batch Entry", fields=["serial_no"], filters={"parent": row.serial_and_batch_bundle}
+			)
+			serial_nos = sorted([cstr(d.serial_no) for d in serial_nos])
+			parsed_serial_nos = get_serial_nos(row.serial_no)
+
+			if len(serial_nos) != len(parsed_serial_nos):
+				throw_error = True
+			elif serial_nos != parsed_serial_nos:
+				for serial_no in serial_nos:
+					if serial_no not in parsed_serial_nos:
+						throw_error = True
+						break
+
+		elif row.batch_no:
+			batches = dontmanage.get_all(
+				"Serial and Batch Entry", fields=["batch_no"], filters={"parent": row.serial_and_batch_bundle}
+			)
+			batches = sorted([d.batch_no for d in batches])
+
+			if batches != [row.batch_no]:
+				throw_error = True
+
+		if throw_error:
+			dontmanage.throw(
+				_(
+					"At row {0}: Serial and Batch Bundle {1} has already created. Please remove the values from the serial no or batch no fields."
+				).format(row.idx, row.serial_and_batch_bundle)
+			)
+
+	def set_use_serial_batch_fields(self):
+		if dontmanage.db.get_single_value("Stock Settings", "use_serial_batch_fields"):
+			for row in self.items:
+				row.use_serial_batch_fields = 1
 
 	def get_gl_entries(
 		self, warehouse_account=None, default_expense_account=None, default_cost_center=None
@@ -201,6 +356,12 @@ class StockController(AccountsController):
 					warehouse_asset_account = warehouse_account[item_row.get("warehouse")]["account"]
 
 				expense_account = dontmanage.get_cached_value("Company", self.company, "default_expense_account")
+				if not expense_account:
+					dontmanage.throw(
+						_(
+							"Please set default cost of goods sold account in company {0} for booking rounding gain and loss during stock transfer"
+						).format(dontmanage.bold(self.company))
+					)
 
 				gl_list.append(
 					self.get_gl_dict(
@@ -325,28 +486,6 @@ class StockController(AccountsController):
 			stock_ledger.setdefault(sle.voucher_detail_no, []).append(sle)
 		return stock_ledger
 
-	def make_batches(self, warehouse_field):
-		"""Create batches if required. Called before submit"""
-		for d in self.items:
-			if d.get(warehouse_field) and not d.batch_no:
-				has_batch_no, create_new_batch = dontmanage.db.get_value(
-					"Item", d.item_code, ["has_batch_no", "create_new_batch"]
-				)
-				if has_batch_no and create_new_batch:
-					d.batch_no = (
-						dontmanage.get_doc(
-							dict(
-								doctype="Batch",
-								item=d.item_code,
-								supplier=getattr(self, "supplier", None),
-								reference_doctype=self.doctype,
-								reference_name=self.name,
-							)
-						)
-						.insert()
-						.name
-					)
-
 	def check_expense_account(self, item):
 		if not item.get("expense_account"):
 			msg = _("Please set an Expense Account in the Items table")
@@ -386,27 +525,69 @@ class StockController(AccountsController):
 				)
 
 	def delete_auto_created_batches(self):
-		for d in self.items:
-			if not d.batch_no:
-				continue
+		for row in self.items:
+			if row.serial_and_batch_bundle:
+				dontmanage.db.set_value(
+					"Serial and Batch Bundle", row.serial_and_batch_bundle, {"is_cancelled": 1}
+				)
 
-			dontmanage.db.set_value(
-				"Serial No", {"batch_no": d.batch_no, "status": "Inactive"}, "batch_no", None
-			)
+				row.db_set("serial_and_batch_bundle", None)
 
-			d.batch_no = None
-			d.db_set("batch_no", None)
+	def set_serial_and_batch_bundle(self, table_name=None, ignore_validate=False):
+		if not table_name:
+			table_name = "items"
 
-		for data in dontmanage.get_all(
-			"Batch", {"reference_name": self.name, "reference_doctype": self.doctype}
-		):
-			dontmanage.delete_doc("Batch", data.name)
+		QTY_FIELD = {
+			"serial_and_batch_bundle": "qty",
+			"current_serial_and_batch_bundle": "current_qty",
+			"rejected_serial_and_batch_bundle": "rejected_qty",
+		}
+
+		for row in self.get(table_name):
+			for field in QTY_FIELD.keys():
+				if row.get(field):
+					dontmanage.get_doc("Serial and Batch Bundle", row.get(field)).set_serial_and_batch_values(
+						self, row, qty_field=QTY_FIELD[field]
+					)
+
+	def make_package_for_transfer(
+		self, serial_and_batch_bundle, warehouse, type_of_transaction=None, do_not_submit=None
+	):
+		bundle_doc = dontmanage.get_doc("Serial and Batch Bundle", serial_and_batch_bundle)
+
+		if not type_of_transaction:
+			type_of_transaction = "Inward"
+
+		bundle_doc = dontmanage.copy_doc(bundle_doc)
+		bundle_doc.warehouse = warehouse
+		bundle_doc.type_of_transaction = type_of_transaction
+		bundle_doc.voucher_type = self.doctype
+		bundle_doc.voucher_no = self.name
+		bundle_doc.is_cancelled = 0
+
+		for row in bundle_doc.entries:
+			row.is_outward = 0
+			row.qty = abs(row.qty)
+			row.stock_value_difference = abs(row.stock_value_difference)
+			if type_of_transaction == "Outward":
+				row.qty *= -1
+				row.stock_value_difference *= row.stock_value_difference
+				row.is_outward = 1
+
+			row.warehouse = warehouse
+
+		bundle_doc.calculate_qty_and_amount()
+		bundle_doc.flags.ignore_permissions = True
+		bundle_doc.save(ignore_permissions=True)
+
+		return bundle_doc.name
 
 	def get_sl_entries(self, d, args):
 		sl_dict = dontmanage._dict(
 			{
 				"item_code": d.get("item_code", None),
 				"warehouse": d.get("warehouse", None),
+				"serial_and_batch_bundle": d.get("serial_and_batch_bundle"),
 				"posting_date": self.posting_date,
 				"posting_time": self.posting_time,
 				"fiscal_year": get_fiscal_year(self.posting_date, company=self.company)[0],
@@ -414,13 +595,11 @@ class StockController(AccountsController):
 				"voucher_no": self.name,
 				"voucher_detail_no": d.name,
 				"actual_qty": (self.docstatus == 1 and 1 or -1) * flt(d.get("stock_qty")),
-				"stock_uom": dontmanage.db.get_value(
+				"stock_uom": dontmanage.get_cached_value(
 					"Item", args.get("item_code") or d.get("item_code"), "stock_uom"
 				),
 				"incoming_rate": 0,
 				"company": self.company,
-				"batch_no": cstr(d.get("batch_no")).strip(),
-				"serial_no": d.get("serial_no"),
 				"project": d.get("project") or self.get("project"),
 				"is_cancelled": 1 if self.docstatus == 2 else 0,
 			}
@@ -428,6 +607,12 @@ class StockController(AccountsController):
 
 		sl_dict.update(args)
 		self.update_inventory_dimensions(d, sl_dict)
+
+		if self.docstatus == 2:
+			# To handle denormalized serial no records, will br deprecated in v16
+			for field in ["serial_no", "batch_no"]:
+				if d.get(field):
+					sl_dict[field] = d.get(field)
 
 		return sl_dict
 
@@ -441,7 +626,43 @@ class StockController(AccountsController):
 			if not dimension:
 				continue
 
-			if row.get(dimension.source_fieldname):
+			if self.doctype in [
+				"Purchase Invoice",
+				"Purchase Receipt",
+				"Sales Invoice",
+				"Delivery Note",
+				"Stock Entry",
+			]:
+				if (
+					(
+						sl_dict.actual_qty > 0
+						and not self.get("is_return")
+						or sl_dict.actual_qty < 0
+						and self.get("is_return")
+					)
+					and self.doctype in ["Purchase Invoice", "Purchase Receipt"]
+				) or (
+					(
+						sl_dict.actual_qty < 0
+						and not self.get("is_return")
+						or sl_dict.actual_qty > 0
+						and self.get("is_return")
+					)
+					and self.doctype in ["Sales Invoice", "Delivery Note", "Stock Entry"]
+				):
+					sl_dict[dimension.target_fieldname] = row.get(dimension.source_fieldname)
+				else:
+					fieldname_start_with = "to"
+					if self.doctype in ["Purchase Invoice", "Purchase Receipt"]:
+						fieldname_start_with = "from"
+
+					fieldname = f"{fieldname_start_with}_{dimension.source_fieldname}"
+					sl_dict[dimension.target_fieldname] = row.get(fieldname)
+
+					if not sl_dict.get(dimension.target_fieldname):
+						sl_dict[dimension.target_fieldname] = row.get(dimension.source_fieldname)
+
+			elif row.get(dimension.source_fieldname):
 				sl_dict[dimension.target_fieldname] = row.get(dimension.source_fieldname)
 
 			if not sl_dict.get(dimension.target_fieldname) and dimension.fetch_from_parent:
@@ -470,6 +691,7 @@ class StockController(AccountsController):
 		make_sl_entries(sl_entries, allow_negative_stock, via_landed_cost_voucher)
 
 	def make_gl_entries_on_cancel(self):
+		cancel_exchange_gain_loss_journal(dontmanage._dict(doctype=self.doctype, name=self.name))
 		if dontmanage.db.sql(
 			"""select name from `tabGL Entry` where voucher_type=%s
 			and voucher_no=%s""",
@@ -534,6 +756,7 @@ class StockController(AccountsController):
 		inspection_fieldname_map = {
 			"Purchase Receipt": "inspection_required_before_purchase",
 			"Purchase Invoice": "inspection_required_before_purchase",
+			"Subcontracting Receipt": "inspection_required_before_purchase",
 			"Sales Invoice": "inspection_required_before_delivery",
 			"Delivery Note": "inspection_required_before_delivery",
 		}
@@ -609,7 +832,7 @@ class StockController(AccountsController):
 	def validate_customer_provided_item(self):
 		for d in self.get("items"):
 			# Customer Provided parts will have zero valuation rate
-			if dontmanage.db.get_value("Item", d.item_code, "is_customer_provided_item"):
+			if dontmanage.get_cached_value("Item", d.item_code, "is_customer_provided_item"):
 				d.allow_zero_valuation_rate = 1
 
 	def set_rate_of_stock_uom(self):
@@ -626,13 +849,24 @@ class StockController(AccountsController):
 				d.stock_uom_rate = d.rate / (d.conversion_factor or 1)
 
 	def validate_internal_transfer(self):
-		if (
-			self.doctype in ("Sales Invoice", "Delivery Note", "Purchase Invoice", "Purchase Receipt")
-			and self.is_internal_transfer()
-		):
-			self.validate_in_transit_warehouses()
-			self.validate_multi_currency()
-			self.validate_packed_items()
+		if self.doctype in ("Sales Invoice", "Delivery Note", "Purchase Invoice", "Purchase Receipt"):
+			if self.is_internal_transfer():
+				self.validate_in_transit_warehouses()
+				self.validate_multi_currency()
+				self.validate_packed_items()
+
+				if self.get("is_internal_supplier"):
+					self.validate_internal_transfer_qty()
+			else:
+				self.validate_internal_transfer_warehouse()
+
+	def validate_internal_transfer_warehouse(self):
+		for row in self.items:
+			if row.get("target_warehouse"):
+				row.target_warehouse = None
+
+			if row.get("from_warehouse"):
+				row.from_warehouse = None
 
 	def validate_in_transit_warehouses(self):
 		if (
@@ -661,6 +895,116 @@ class StockController(AccountsController):
 		if self.doctype in ("Sales Invoice", "Delivery Note Item") and self.get("packed_items"):
 			dontmanage.throw(_("Packed Items cannot be transferred internally"))
 
+	def validate_internal_transfer_qty(self):
+		if self.doctype not in ["Purchase Invoice", "Purchase Receipt"]:
+			return
+
+		item_wise_transfer_qty = self.get_item_wise_inter_transfer_qty()
+		if not item_wise_transfer_qty:
+			return
+
+		item_wise_received_qty = self.get_item_wise_inter_received_qty()
+		precision = dontmanage.get_precision(self.doctype + " Item", "qty")
+
+		over_receipt_allowance = dontmanage.db.get_single_value(
+			"Stock Settings", "over_delivery_receipt_allowance"
+		)
+
+		parent_doctype = {
+			"Purchase Receipt": "Delivery Note",
+			"Purchase Invoice": "Sales Invoice",
+		}.get(self.doctype)
+
+		for key, transferred_qty in item_wise_transfer_qty.items():
+			recevied_qty = flt(item_wise_received_qty.get(key), precision)
+			if over_receipt_allowance:
+				transferred_qty = transferred_qty + flt(
+					transferred_qty * over_receipt_allowance / 100, precision
+				)
+
+			if recevied_qty > flt(transferred_qty, precision):
+				dontmanage.throw(
+					_("For Item {0} cannot be received more than {1} qty against the {2} {3}").format(
+						bold(key[1]),
+						bold(flt(transferred_qty, precision)),
+						bold(parent_doctype),
+						get_link_to_form(parent_doctype, self.get("inter_company_reference")),
+					)
+				)
+
+	def get_item_wise_inter_transfer_qty(self):
+		reference_field = "inter_company_reference"
+		if self.doctype == "Purchase Invoice":
+			reference_field = "inter_company_invoice_reference"
+
+		parent_doctype = {
+			"Purchase Receipt": "Delivery Note",
+			"Purchase Invoice": "Sales Invoice",
+		}.get(self.doctype)
+
+		child_doctype = parent_doctype + " Item"
+
+		parent_tab = dontmanage.qb.DocType(parent_doctype)
+		child_tab = dontmanage.qb.DocType(child_doctype)
+
+		query = (
+			dontmanage.qb.from_(parent_doctype)
+			.inner_join(child_tab)
+			.on(child_tab.parent == parent_tab.name)
+			.select(
+				child_tab.name,
+				child_tab.item_code,
+				child_tab.qty,
+			)
+			.where((parent_tab.name == self.get(reference_field)) & (parent_tab.docstatus == 1))
+		)
+
+		data = query.run(as_dict=True)
+		item_wise_transfer_qty = defaultdict(float)
+		for row in data:
+			item_wise_transfer_qty[(row.name, row.item_code)] += flt(row.qty)
+
+		return item_wise_transfer_qty
+
+	def get_item_wise_inter_received_qty(self):
+		child_doctype = self.doctype + " Item"
+
+		parent_tab = dontmanage.qb.DocType(self.doctype)
+		child_tab = dontmanage.qb.DocType(child_doctype)
+
+		query = (
+			dontmanage.qb.from_(self.doctype)
+			.inner_join(child_tab)
+			.on(child_tab.parent == parent_tab.name)
+			.select(
+				child_tab.item_code,
+				child_tab.qty,
+			)
+			.where(parent_tab.docstatus < 2)
+		)
+
+		if self.doctype == "Purchase Invoice":
+			query = query.select(
+				child_tab.sales_invoice_item.as_("name"),
+			)
+
+			query = query.where(
+				parent_tab.inter_company_invoice_reference == self.inter_company_invoice_reference
+			)
+		else:
+			query = query.select(
+				child_tab.delivery_note_item.as_("name"),
+			)
+
+			query = query.where(parent_tab.inter_company_reference == self.inter_company_reference)
+
+		data = query.run(as_dict=True)
+		item_wise_transfer_qty = defaultdict(float)
+		for row in data:
+			item_wise_transfer_qty[(row.name, row.item_code)] += flt(row.qty)
+
+		return item_wise_transfer_qty
+
 	def validate_putaway_capacity(self):
 		# if over receipt is attempted while 'apply putaway rule' is disabled
 		# and if rule was applied on the transaction, validate it.
@@ -672,6 +1016,9 @@ class StockController(AccountsController):
 			"Purchase Invoice",
 			"Stock Reconciliation",
 		)
+
+		if not dontmanage.get_all("Putaway Rule", limit=1):
+			return
 
 		if self.doctype == "Purchase Invoice" and self.get("update_stock") == 0:
 			valid_doctype = False
@@ -722,7 +1069,7 @@ class StockController(AccountsController):
 		message += _("Please adjust the qty or edit {0} to proceed.").format(rule_link)
 		return message
 
-	def repost_future_sle_and_gle(self):
+	def repost_future_sle_and_gle(self, force=False):
 		args = dontmanage._dict(
 			{
 				"posting_date": self.posting_date,
@@ -733,7 +1080,10 @@ class StockController(AccountsController):
 			}
 		)
 
-		if future_sle_exists(args) or repost_required_for_queue(self):
+		if self.docstatus == 2:
+			force = True
+
+		if force or future_sle_exists(args) or repost_required_for_queue(self):
 			item_based_reposting = cint(
 				dontmanage.db.get_single_value("Stock Reposting Settings", "item_based_reposting")
 			)
@@ -782,6 +1132,151 @@ class StockController(AccountsController):
 			gl_entry.update({"posting_date": posting_date})
 
 		gl_entries.append(self.get_gl_dict(gl_entry, item=item))
+
+
+@dontmanage.whitelist()
+def show_accounting_ledger_preview(company, doctype, docname):
+	filters = dontmanage._dict(company=company, include_dimensions=1)
+	doc = dontmanage.get_doc(doctype, docname)
+	doc.run_method("before_gl_preview")
+
+	gl_columns, gl_data = get_accounting_ledger_preview(doc, filters)
+
+	dontmanage.db.rollback()
+
+	return {"gl_columns": gl_columns, "gl_data": gl_data}
+
+
+@dontmanage.whitelist()
+def show_stock_ledger_preview(company, doctype, docname):
+	filters = dontmanage._dict(company=company)
+	doc = dontmanage.get_doc(doctype, docname)
+	doc.run_method("before_sl_preview")
+
+	sl_columns, sl_data = get_stock_ledger_preview(doc, filters)
+
+	dontmanage.db.rollback()
+
+	return {
+		"sl_columns": sl_columns,
+		"sl_data": sl_data,
+	}
+
+
+def get_accounting_ledger_preview(doc, filters):
+	from dontmanageerp.accounts.report.general_ledger.general_ledger import get_columns as get_gl_columns
+
+	gl_columns, gl_data = [], []
+	fields = [
+		"posting_date",
+		"account",
+		"debit",
+		"credit",
+		"against",
+		"party",
+		"party_type",
+		"cost_center",
+		"against_voucher_type",
+		"against_voucher",
+	]
+
+	doc.docstatus = 1
+
+	if doc.get("update_stock") or doc.doctype in ("Purchase Receipt", "Delivery Note"):
+		doc.update_stock_ledger()
+
+	doc.make_gl_entries()
+	columns = get_gl_columns(filters)
+	gl_entries = get_gl_entries_for_preview(doc.doctype, doc.name, fields)
+
+	gl_columns = get_columns(columns, fields)
+	gl_data = get_data(fields, gl_entries)
+
+	return gl_columns, gl_data
+
+
+def get_stock_ledger_preview(doc, filters):
+	from dontmanageerp.stock.report.stock_ledger.stock_ledger import get_columns as get_sl_columns
+
+	sl_columns, sl_data = [], []
+	fields = [
+		"item_code",
+		"stock_uom",
+		"actual_qty",
+		"qty_after_transaction",
+		"warehouse",
+		"incoming_rate",
+		"valuation_rate",
+		"stock_value",
+		"stock_value_difference",
+	]
+	columns_fields = [
+		"item_code",
+		"stock_uom",
+		"in_qty",
+		"out_qty",
+		"qty_after_transaction",
+		"warehouse",
+		"incoming_rate",
+		"in_out_rate",
+		"stock_value",
+		"stock_value_difference",
+	]
+
+	if doc.get("update_stock") or doc.doctype in ("Purchase Receipt", "Delivery Note"):
+		doc.docstatus = 1
+		doc.update_stock_ledger()
+		columns = get_sl_columns(filters)
+		sl_entries = get_sl_entries_for_preview(doc.doctype, doc.name, fields)
+
+		sl_columns = get_columns(columns, columns_fields)
+		sl_data = get_data(columns_fields, sl_entries)
+
+	return sl_columns, sl_data
+
+
+def get_sl_entries_for_preview(doctype, docname, fields):
+	sl_entries = dontmanage.get_all(
+		"Stock Ledger Entry", filters={"voucher_type": doctype, "voucher_no": docname}, fields=fields
+	)
+
+	for entry in sl_entries:
+		if entry.actual_qty > 0:
+			entry["in_qty"] = entry.actual_qty
+			entry["out_qty"] = 0
+		else:
+			entry["out_qty"] = abs(entry.actual_qty)
+			entry["in_qty"] = 0
+
+		entry["in_out_rate"] = entry["valuation_rate"]
+
+	return sl_entries
+
+
+def get_gl_entries_for_preview(doctype, docname, fields):
+	return dontmanage.get_all(
+		"GL Entry", filters={"voucher_type": doctype, "voucher_no": docname}, fields=fields
+	)
+
+
+def get_columns(raw_columns, fields):
+	return [
+		{"name": d.get("label"), "editable": False, "width": 110}
+		for d in raw_columns
+		if not d.get("hidden") and d.get("fieldname") in fields
+	]
+
+
+def get_data(raw_columns, raw_data):
+	datatable_data = []
+	for row in raw_data:
+		data_row = []
+		for column in raw_columns:
+			data_row.append(row.get(column) or "")
+
+		datatable_data.append(data_row)
+
+	return datatable_data
 
 
 def repost_required_for_queue(doc: StockController) -> bool:
@@ -859,6 +1354,8 @@ def is_reposting_pending():
 
 def future_sle_exists(args, sl_entries=None):
 	key = (args.voucher_type, args.voucher_no)
+	if not hasattr(dontmanage.local, "future_sle"):
+		dontmanage.local.future_sle = {}
 
 	if validate_future_sle_not_exists(args, key, sl_entries):
 		return False
@@ -903,6 +1400,9 @@ def validate_future_sle_not_exists(args, key, sl_entries=None):
 		item_key = (args.get("item_code"), args.get("warehouse"))
 
 	if not sl_entries and hasattr(dontmanage.local, "future_sle"):
+		if key not in dontmanage.local.future_sle:
+			return False
+
 		if not dontmanage.local.future_sle.get(key) or (
 			item_key and item_key not in dontmanage.local.future_sle.get(key)
 		):
@@ -910,9 +1410,6 @@ def validate_future_sle_not_exists(args, key, sl_entries=None):
 
 
 def get_cached_data(args, key):
-	if not hasattr(dontmanage.local, "future_sle"):
-		dontmanage.local.future_sle = {}
-
 	if key not in dontmanage.local.future_sle:
 		dontmanage.local.future_sle[key] = dontmanage._dict({})
 
@@ -988,8 +1485,6 @@ def create_item_wise_repost_entries(voucher_type, voucher_no, allow_zero_rate=Fa
 
 		repost_entry = dontmanage.new_doc("Repost Item Valuation")
 		repost_entry.based_on = "Item and Warehouse"
-		repost_entry.voucher_type = voucher_type
-		repost_entry.voucher_no = voucher_no
 
 		repost_entry.item_code = sle.item_code
 		repost_entry.warehouse = sle.warehouse

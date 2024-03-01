@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 function get_filters() {
 	let filters = [
@@ -48,7 +48,7 @@ function get_filters() {
 			"label": __("Start Year"),
 			"fieldtype": "Link",
 			"options": "Fiscal Year",
-			"default": dontmanage.defaults.get_user_default("fiscal_year"),
+			"default": dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today()),
 			"reqd": 1
 		},
 		{
@@ -56,7 +56,7 @@ function get_filters() {
 			"label": __("End Year"),
 			"fieldtype": "Link",
 			"options": "Fiscal Year",
-			"default": dontmanage.defaults.get_user_default("fiscal_year"),
+			"default": dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today()),
 			"reqd": 1
 		},
 		{
@@ -100,7 +100,7 @@ dontmanage.query_reports["Deferred Revenue and Expense"] = {
 		return default_formatter(value, row, column, data);
 	},
 	onload: function(report){
-		let fiscal_year = dontmanage.defaults.get_user_default("fiscal_year");
+		let fiscal_year = dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today());
 
 		dontmanage.model.with_doc("Fiscal Year", fiscal_year, function(r) {
 			var fy = dontmanage.model.get_doc("Fiscal Year", fiscal_year);

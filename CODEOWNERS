@@ -3,13 +3,12 @@
 # These owners will be the default owners for everything in
 # the repo. Unless a later match takes precedence,
 
-dontmanageerp/accounts/               @nextchamp-saqib @deepeshgarg007 @ruthra-kumar
+dontmanageerp/accounts/               @deepeshgarg007 @ruthra-kumar
 dontmanageerp/assets/                 @anandbaburajan @deepeshgarg007
-dontmanageerp/loan_management/        @nextchamp-saqib @deepeshgarg007
-dontmanageerp/regional                @nextchamp-saqib @deepeshgarg007 @ruthra-kumar
-dontmanageerp/selling                 @nextchamp-saqib @deepeshgarg007 @ruthra-kumar
-dontmanageerp/support/                @nextchamp-saqib @deepeshgarg007
-pos*                            @nextchamp-saqib
+dontmanageerp/regional                @deepeshgarg007 @ruthra-kumar
+dontmanageerp/selling                 @deepeshgarg007 @ruthra-kumar
+dontmanageerp/support/                @deepeshgarg007
+pos*                            
 
 dontmanageerp/buying/                 @rohitwaghchaure @s-aga-r
 dontmanageerp/maintenance/            @rohitwaghchaure @s-aga-r
@@ -18,12 +17,8 @@ dontmanageerp/quality_management/     @rohitwaghchaure @s-aga-r
 dontmanageerp/stock/                  @rohitwaghchaure @s-aga-r
 dontmanageerp/subcontracting          @rohitwaghchaure @s-aga-r
 
-dontmanageerp/crm/                    @NagariaHussain 
-dontmanageerp/education/              @rutwikhdev 
-dontmanageerp/projects/               @ruchamahabal
+dontmanageerp/controllers/            @deepeshgarg007 @rohitwaghchaure
+dontmanageerp/patches/                @deepeshgarg007 
 
-dontmanageerp/controllers/            @deepeshgarg007 @nextchamp-saqib @rohitwaghchaure
-dontmanageerp/patches/                @deepeshgarg007 @nextchamp-saqib
-
-.github/                        @ankush
-pyproject.toml                  @ankush
+.github/                        @deepeshgarg007
+pyproject.toml                  @phot0n

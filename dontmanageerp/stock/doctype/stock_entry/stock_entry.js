@@ -3,10 +3,12 @@
 dontmanage.provide("dontmanageerp.stock");
 dontmanage.provide("dontmanageerp.accounts.dimensions");
 
-{% include 'dontmanageerp/stock/landed_taxes_and_charges_common.js' %};
+dontmanageerp.landed_cost_taxes_and_charges.setup_triggers("Stock Entry");
 
 dontmanage.ui.form.on('Stock Entry', {
 	setup: function(frm) {
+		frm.ignore_doctypes_on_cancel_all = ['Serial and Batch Bundle'];
+
 		frm.set_indicator_formatter('item_code', function(doc) {
 			if (!doc.s_warehouse) {
 				return 'blue';
@@ -54,7 +56,7 @@ dontmanage.ui.form.on('Stock Entry', {
 
 		dontmanage.db.get_value('Stock Settings', {name: 'Stock Settings'}, 'sample_retention_warehouse', (r) => {
 			if (r.sample_retention_warehouse) {
-				var filters = [
+				let filters = [
 							["Warehouse", 'company', '=', frm.doc.company],
 							["Warehouse", "is_group", "=",0],
 							['Warehouse', 'name', '!=', r.sample_retention_warehouse]
@@ -73,17 +75,19 @@ dontmanage.ui.form.on('Stock Entry', {
 		});
 
 		frm.set_query('batch_no', 'items', function(doc, cdt, cdn) {
-			var item = locals[cdt][cdn];
+			let item = locals[cdt][cdn];
+			let filters = {};
+
 			if(!item.item_code) {
 				dontmanage.throw(__("Please enter Item Code to get Batch Number"));
 			} else {
 				if (in_list(["Material Transfer for Manufacture", "Manufacture", "Repack", "Send to Subcontractor"], doc.purpose)) {
-					var filters = {
+					filters = {
 						'item_code': item.item_code,
 						'posting_date': frm.doc.posting_date || dontmanage.datetime.nowdate()
 					}
 				} else {
-					var filters = {
+					filters = {
 						'item_code': item.item_code
 					}
 				}
@@ -97,6 +101,18 @@ dontmanage.ui.form.on('Stock Entry', {
 				return {
 					query : "dontmanageerp.controllers.queries.get_batch_no",
 					filters: filters
+				}
+			}
+		});
+
+		frm.set_query("serial_and_batch_bundle", "items", (doc, cdt, cdn) => {
+			let row = locals[cdt][cdn];
+			return {
+				filters: {
+					'item_code': row.item_code,
+					'voucher_type': doc.doctype,
+					'voucher_no': ["in", [doc.name, ""]],
+					'is_cancelled': 0,
 				}
 			}
 		});
@@ -133,7 +149,7 @@ dontmanage.ui.form.on('Stock Entry', {
 
 		let quality_inspection_field = frm.get_docfield("items", "quality_inspection");
 		quality_inspection_field.get_route_options_for_new_doc = function(row) {
-			if (frm.is_new()) return;
+			if (frm.is_new()) return {};
 			return {
 				"inspection_type": "Incoming",
 				"reference_type": frm.doc.doctype,
@@ -242,7 +258,7 @@ dontmanage.ui.form.on('Stock Entry', {
 			}
 		}
 
-		if (frm.doc.docstatus===0) {
+		if (frm.doc.docstatus === 0) {
 			frm.add_custom_button(__('Purchase Invoice'), function() {
 				dontmanageerp.utils.map_current_doc({
 					method: "dontmanageerp.accounts.doctype.purchase_invoice.purchase_invoice.make_stock_entry",
@@ -295,7 +311,8 @@ dontmanage.ui.form.on('Stock Entry', {
 				})
 			}, __("Get Items From"));
 		}
-		if (frm.doc.docstatus===0 && frm.doc.purpose == "Material Issue") {
+
+		if (frm.doc.docstatus === 0 && frm.doc.purpose == "Material Issue") {
 			frm.add_custom_button(__('Expired Batches'), function() {
 				dontmanage.call({
 					method: "dontmanageerp.stock.doctype.stock_entry.stock_entry.get_expired_batch_items",
@@ -337,6 +354,16 @@ dontmanage.ui.form.on('Stock Entry', {
 		if(!check_should_not_attach_bom_items(frm.doc.bom_no)) {
 			dontmanageerp.accounts.dimensions.update_dimension(frm, frm.doctype);
 		}
+
+		let sbb_field = frm.get_docfield('items', 'serial_and_batch_bundle');
+		if (sbb_field) {
+			sbb_field.get_route_options_for_new_doc = (row) => {
+				return {
+					'item_code': row.doc.item_code,
+					'voucher_type': frm.doc.doctype,
+				}
+			};
+		}
 	},
 
 	get_items_from_transit_entry: function(frm) {
@@ -371,6 +398,10 @@ dontmanage.ui.form.on('Stock Entry', {
 		frm.remove_custom_button('Bill of Materials', "Get Items From");
 		frm.events.show_bom_custom_button(frm);
 		frm.trigger('add_to_transit');
+
+		frm.fields_dict.items.grid.update_docfield_property(
+			'basic_rate', 'read_only', frm.doc.purpose == "Material Receipt" ? 0 : 1
+		);
 	},
 
 	purpose: function(frm) {
@@ -401,28 +432,6 @@ dontmanage.ui.form.on('Stock Entry', {
 
 			dontmanageerp.accounts.dimensions.update_dimension(frm, frm.doctype);
 		}
-	},
-
-	set_serial_no: function(frm, cdt, cdn, callback) {
-		var d = dontmanage.model.get_doc(cdt, cdn);
-		if(!d.item_code && !d.s_warehouse && !d.qty) return;
-		var	args = {
-			'item_code'	: d.item_code,
-			'warehouse'	: cstr(d.s_warehouse),
-			'stock_qty'		: d.transfer_qty
-		};
-		dontmanage.call({
-			method: "dontmanageerp.stock.get_item_details.get_serial_no",
-			args: {"args": args},
-			callback: function(r) {
-				if (!r.exe && r.message){
-					dontmanage.model.set_value(cdt, cdn, "serial_no", r.message);
-				}
-				if (callback) {
-					callback();
-				}
-			}
-		});
 	},
 
 	make_retention_stock_entry: function(frm) {
@@ -491,8 +500,7 @@ dontmanage.ui.form.on('Stock Entry', {
 						'item_code': child.item_code,
 						'warehouse': cstr(child.s_warehouse) || cstr(child.t_warehouse),
 						'transfer_qty': child.transfer_qty,
-						'serial_no': child.serial_no,
-						'batch_no': child.batch_no,
+						'serial_and_batch_bundle': child.serial_and_batch_bundle,
 						'qty': child.s_warehouse ? -1* child.transfer_qty : child.transfer_qty,
 						'posting_date': frm.doc.posting_date,
 						'posting_time': frm.doc.posting_time,
@@ -504,7 +512,12 @@ dontmanage.ui.form.on('Stock Entry', {
 				},
 				callback: function(r) {
 					if (!r.exc) {
-						["actual_qty", "basic_rate"].forEach((field) => {
+						let fields = ["actual_qty", "basic_rate"];
+						if (frm.doc.purpose == "Material Receipt") {
+							fields = ["actual_qty"];
+						}
+
+						fields.forEach((field) => {
 							dontmanage.model.set_value(cdt, cdn, field, (r.message[field] || 0.0));
 						});
 						frm.events.calculate_basic_amount(frm, child);
@@ -530,7 +543,9 @@ dontmanage.ui.form.on('Stock Entry', {
 
 		let fields = [
 			{"fieldname":"bom", "fieldtype":"Link", "label":__("BOM"),
-			options:"BOM", reqd: 1, get_query: filters()},
+			options:"BOM", reqd: 1, get_query: () => {
+				return {filters: { docstatus:1, "is_active": 1 }};
+			}},
 			{"fieldname":"source_warehouse", "fieldtype":"Link", "label":__("Source Warehouse"),
 			options:"Warehouse"},
 			{"fieldname":"target_warehouse", "fieldtype":"Link", "label":__("Target Warehouse"),
@@ -677,23 +692,33 @@ dontmanage.ui.form.on('Stock Entry', {
 			});
 		}
 	},
+
+	process_loss_qty(frm) {
+		if (frm.doc.process_loss_qty) {
+			frm.doc.process_loss_percentage = flt(frm.doc.process_loss_qty / frm.doc.fg_completed_qty * 100, precision("process_loss_qty", frm.doc));
+			refresh_field("process_loss_percentage");
+		}
+	},
+
+	process_loss_percentage(frm) {
+		if (frm.doc.process_loss_percentage) {
+			frm.doc.process_loss_qty = flt((frm.doc.fg_completed_qty * frm.doc.process_loss_percentage) / 100 , precision("process_loss_qty", frm.doc));
+			refresh_field("process_loss_qty");
+		}
+	}
 });
 
 dontmanage.ui.form.on('Stock Entry Detail', {
-	qty: function(frm, cdt, cdn) {
-		frm.events.set_serial_no(frm, cdt, cdn, () => {
-			frm.events.set_basic_rate(frm, cdt, cdn);
-		});
-	},
-
-	conversion_factor: function(frm, cdt, cdn) {
+	qty(frm, cdt, cdn) {
 		frm.events.set_basic_rate(frm, cdt, cdn);
 	},
 
-	s_warehouse: function(frm, cdt, cdn) {
-		frm.events.set_serial_no(frm, cdt, cdn, () => {
-			frm.events.get_warehouse_details(frm, cdt, cdn);
-		});
+	conversion_factor(frm, cdt, cdn) {
+		frm.events.set_basic_rate(frm, cdt, cdn);
+	},
+
+	s_warehouse(frm, cdt, cdn) {
+		frm.events.get_warehouse_details(frm, cdt, cdn);
 
 		// set allow_zero_valuation_rate to 0 if s_warehouse is selected.
 		let item = dontmanage.get_doc(cdt, cdn);
@@ -702,16 +727,16 @@ dontmanage.ui.form.on('Stock Entry Detail', {
 		}
 	},
 
-	t_warehouse: function(frm, cdt, cdn) {
+	t_warehouse(frm, cdt, cdn) {
 		frm.events.get_warehouse_details(frm, cdt, cdn);
 	},
 
-	basic_rate: function(frm, cdt, cdn) {
+	basic_rate(frm, cdt, cdn) {
 		var item = locals[cdt][cdn];
 		frm.events.calculate_basic_amount(frm, item);
 	},
 
-	uom: function(doc, cdt, cdn) {
+	uom(doc, cdt, cdn) {
 		var d = locals[cdt][cdn];
 		if(d.uom && d.item_code){
 			return dontmanage.call({
@@ -730,7 +755,7 @@ dontmanage.ui.form.on('Stock Entry Detail', {
 		}
 	},
 
-	item_code: function(frm, cdt, cdn) {
+	item_code(frm, cdt, cdn) {
 		var d = locals[cdt][cdn];
 		if(d.item_code) {
 			var args = {
@@ -763,32 +788,43 @@ dontmanage.ui.form.on('Stock Entry Detail', {
 						});
 						refresh_field("items");
 
-						let no_batch_serial_number_value = !d.serial_no;
-						if (d.has_batch_no && !d.has_serial_no) {
-							// check only batch_no for batched item
-							no_batch_serial_number_value = !d.batch_no;
+						let no_batch_serial_number_value = false;
+						if (d.has_serial_no || d.has_batch_no) {
+							no_batch_serial_number_value = true;
 						}
 
-						if (no_batch_serial_number_value && !dontmanage.flags.hide_serial_batch_dialog) {
+						if (no_batch_serial_number_value && !dontmanage.flags.hide_serial_batch_dialog && !dontmanage.flags.dialog_set) {
+							dontmanage.flags.dialog_set = true;
 							dontmanageerp.stock.select_batch_and_serial_no(frm, d);
+						} else {
+							dontmanage.flags.dialog_set = false;
 						}
 					}
 				}
 			});
 		}
 	},
-	expense_account: function(frm, cdt, cdn) {
+
+	expense_account(frm, cdt, cdn) {
 		dontmanageerp.utils.copy_value_in_all_rows(frm.doc, cdt, cdn, "items", "expense_account");
 	},
-	cost_center: function(frm, cdt, cdn) {
+
+	cost_center(frm, cdt, cdn) {
 		dontmanageerp.utils.copy_value_in_all_rows(frm.doc, cdt, cdn, "items", "cost_center");
 	},
-	sample_quantity: function(frm, cdt, cdn) {
+
+	sample_quantity(frm, cdt, cdn) {
 		validate_sample_quantity(frm, cdt, cdn);
 	},
-	batch_no: function(frm, cdt, cdn) {
+
+	batch_no(frm, cdt, cdn) {
 		validate_sample_quantity(frm, cdt, cdn);
 	},
+
+	add_serial_batch_bundle(frm, cdt, cdn) {
+		var child = locals[cdt][cdn];
+		dontmanageerp.stock.select_batch_and_serial_no(frm, child);
+	}
 });
 
 var validate_sample_quantity = function(frm, cdt, cdn) {
@@ -902,14 +938,46 @@ dontmanageerp.stock.StockEntry = class StockEntry extends dontmanageerp.stock.St
 		this.toggle_related_fields(this.frm.doc);
 		this.toggle_enable_bom();
 		this.show_stock_ledger();
+		this.set_fields_onload_for_line_item();
+		dontmanageerp.utils.view_serial_batch_nos(this.frm);
 		if (this.frm.doc.docstatus===1 && dontmanageerp.is_perpetual_inventory_enabled(this.frm.doc.company)) {
 			this.show_general_ledger();
 		}
-		dontmanageerp.hide_company();
+		dontmanageerp.hide_company(this.frm);
 		dontmanageerp.utils.add_item(this.frm);
 	}
 
+	serial_no(doc, cdt, cdn) {
+		var item = dontmanage.get_doc(cdt, cdn);
+
+		if (item?.serial_no) {
+			// Replace all occurences of comma with line feed
+			item.serial_no = item.serial_no.replace(/,/g, '\n');
+			item.conversion_factor = item.conversion_factor || 1;
+
+			let valid_serial_nos = [];
+			let serialnos = item.serial_no.split("\n");
+			for (var i = 0; i < serialnos.length; i++) {
+				if (serialnos[i] != "") {
+					valid_serial_nos.push(serialnos[i]);
+				}
+			}
+			dontmanage.model.set_value(item.doctype, item.name,
+				"qty", valid_serial_nos.length / item.conversion_factor);
+		}
+	}
+
+	set_fields_onload_for_line_item() {
+		if (this.frm.is_new() && this.frm.doc?.items
+			&& cint(dontmanage.user_defaults?.use_serial_batch_fields) === 1) {
+			this.frm.doc.items.forEach(item => {
+				dontmanage.model.set_value(item.doctype, item.name, "use_serial_batch_fields", 1);
+			})
+		}
+	}
+
 	scan_barcode() {
+		dontmanage.flags.dialog_set = false;
 		const barcode_scanner = new dontmanageerp.utils.BarcodeScanner({frm:this.frm});
 		barcode_scanner.process_scan();
 	}
@@ -1038,6 +1106,10 @@ dontmanageerp.stock.StockEntry = class StockEntry extends dontmanageerp.stock.St
 
 		if(!row.s_warehouse) row.s_warehouse = this.frm.doc.from_warehouse;
 		if(!row.t_warehouse) row.t_warehouse = this.frm.doc.to_warehouse;
+
+		if (cint(dontmanage.user_defaults?.use_serial_batch_fields)) {
+			dontmanage.model.set_value(row.doctype, row.name, "use_serial_batch_fields", 1);
+		}
 	}
 
 	from_warehouse(doc) {
@@ -1093,35 +1165,30 @@ dontmanageerp.stock.StockEntry = class StockEntry extends dontmanageerp.stock.St
 };
 
 dontmanageerp.stock.select_batch_and_serial_no = (frm, item) => {
-	let get_warehouse_type_and_name = (item) => {
-		let value = '';
-		if(frm.fields_dict.from_warehouse.disp_status === "Write") {
-			value = cstr(item.s_warehouse) || '';
-			return {
-				type: 'Source Warehouse',
-				name: value
-			};
-		} else {
-			value = cstr(item.t_warehouse) || '';
-			return {
-				type: 'Target Warehouse',
-				name: value
-			};
-		}
-	}
+	let path = "assets/dontmanageerp/js/utils/serial_no_batch_selector.js";
 
-	if(item && !item.has_serial_no && !item.has_batch_no) return;
-	if (frm.doc.purpose === 'Material Receipt') return;
+	dontmanage.db.get_value("Item", item.item_code, ["has_batch_no", "has_serial_no"])
+		.then((r) => {
+			if (r.message && (r.message.has_batch_no || r.message.has_serial_no)) {
+				item.has_serial_no = r.message.has_serial_no;
+				item.has_batch_no = r.message.has_batch_no;
+				item.type_of_transaction = item.s_warehouse ? "Outward" : "Inward";
 
-	dontmanage.require("assets/dontmanageerp/js/utils/serial_no_batch_selector.js", function() {
-		if (frm.batch_selector?.dialog?.display) return;
-		frm.batch_selector = new dontmanageerp.SerialNoBatchSelector({
-			frm: frm,
-			item: item,
-			warehouse_details: get_warehouse_type_and_name(item),
+				dontmanage.require(path, function() {
+					new dontmanageerp.SerialBatchPackageSelector(
+						frm, item, (r) => {
+							if (r) {
+								dontmanage.model.set_value(item.doctype, item.name, {
+									"serial_and_batch_bundle": r.name,
+									"use_serial_batch_fields": 0,
+									"qty": Math.abs(r.total_qty) / flt(item.conversion_factor || 1, precision("conversion_factor", item))
+								});
+							}
+						}
+					);
+				});
+			}
 		});
-	});
-
 }
 
 function attach_bom_items(bom_no) {

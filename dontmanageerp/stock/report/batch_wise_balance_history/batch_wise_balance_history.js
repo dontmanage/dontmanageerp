@@ -16,7 +16,7 @@ dontmanage.query_reports["Batch-Wise Balance History"] = {
 			"label": __("From Date"),
 			"fieldtype": "Date",
 			"width": "80",
-			"default": dontmanage.sys_defaults.year_start_date,
+			"default": dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[1],
 			"reqd": 1
 		},
 		{

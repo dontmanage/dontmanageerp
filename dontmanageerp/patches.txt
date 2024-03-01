@@ -15,7 +15,6 @@ dontmanageerp.patches.v10_0.rename_price_to_rate_in_pricing_rule
 dontmanageerp.patches.v10_0.set_currency_in_pricing_rule
 dontmanageerp.patches.v10_0.update_translatable_fields
 execute:dontmanage.delete_doc('DocType', 'Production Planning Tool', ignore_missing=True)
-dontmanageerp.patches.v10_0.add_default_cash_flow_mappers
 dontmanageerp.patches.v11_0.rename_duplicate_item_code_values
 dontmanageerp.patches.v11_0.make_quality_inspection_template
 dontmanageerp.patches.v11_0.merge_land_unit_with_location
@@ -106,7 +105,6 @@ execute:dontmanage.reload_doc('desk', 'doctype', 'dashboard_chart_source')
 execute:dontmanage.reload_doc('desk', 'doctype', 'dashboard_chart')
 execute:dontmanage.reload_doc('desk', 'doctype', 'dashboard_chart_field')
 dontmanageerp.patches.v12_0.remove_bank_remittance_custom_fields
-execute:dontmanage.delete_doc_if_exists("Report", "Loan Repayment")
 dontmanageerp.patches.v12_0.move_credit_limit_to_customer_credit_limit
 dontmanageerp.patches.v12_0.add_variant_of_in_item_attribute_table
 dontmanageerp.patches.v12_0.rename_bank_account_field_in_journal_entry_account
@@ -146,7 +144,6 @@ execute:dontmanage.delete_doc_if_exists("Page", "appointment-analytic")
 execute:dontmanage.rename_doc("Desk Page", "Getting Started", "Home", force=True)
 dontmanageerp.patches.v12_0.unset_customer_supplier_based_on_type_of_item_price
 dontmanageerp.patches.v12_0.set_valid_till_date_in_supplier_quotation
-dontmanageerp.patches.v13_0.update_old_loans
 dontmanageerp.patches.v12_0.set_serial_no_status #2020-05-21
 dontmanageerp.patches.v12_0.update_price_list_currency_in_bom
 execute:dontmanage.reload_doctype('Dashboard')
@@ -155,7 +152,6 @@ execute:dontmanage.delete_doc_if_exists('Dashboard', 'Accounts')
 dontmanageerp.patches.v13_0.update_actual_start_and_end_date_in_wo
 dontmanageerp.patches.v12_0.update_bom_in_so_mr
 execute:dontmanage.delete_doc("Report", "Department Analytics")
-execute:dontmanage.rename_doc("Desk Page", "Loan Management", "Loan", force=True)
 dontmanageerp.patches.v12_0.update_uom_conversion_factor
 dontmanageerp.patches.v13_0.replace_pos_page_with_point_of_sale_page
 dontmanageerp.patches.v13_0.delete_old_purchase_reports
@@ -169,7 +165,6 @@ dontmanageerp.patches.v13_0.delete_old_sales_reports
 execute:dontmanage.delete_doc_if_exists("DocType", "Bank Reconciliation")
 execute:dontmanage.reload_doc("regional", "doctype", "e_invoice_settings")
 dontmanageerp.patches.v13_0.loyalty_points_entry_for_pos_invoice #22-07-2020
-dontmanageerp.patches.v12_0.add_taxjar_integration_field
 dontmanageerp.patches.v12_0.fix_percent_complete_for_projects
 dontmanageerp.patches.v13_0.delete_report_requested_items_to_order
 dontmanageerp.patches.v12_0.update_item_tax_template_company
@@ -189,7 +184,6 @@ dontmanageerp.patches.v13_0.update_member_email_address
 dontmanageerp.patches.v13_0.update_pos_closing_entry_in_merge_log
 dontmanageerp.patches.v13_0.add_po_to_global_search
 dontmanageerp.patches.v13_0.update_returned_qty_in_pr_dn
-execute:dontmanage.rename_doc("Workspace", "Loan", "Loan Management", ignore_if_exists=True, force=True)
 dontmanageerp.patches.v13_0.create_uae_pos_invoice_fields
 dontmanageerp.patches.v13_0.update_project_template_tasks
 dontmanageerp.patches.v13_0.convert_qi_parameter_to_link_field
@@ -206,7 +200,6 @@ dontmanageerp.patches.v12_0.add_document_type_field_for_italy_einvoicing
 dontmanageerp.patches.v13_0.update_shipment_status
 dontmanageerp.patches.v13_0.remove_attribute_field_from_item_variant_setting
 dontmanageerp.patches.v13_0.set_pos_closing_as_failed
-execute:dontmanage.rename_doc("Workspace", "Loan Management", "Loans", force=True)
 dontmanageerp.patches.v13_0.update_timesheet_changes
 dontmanageerp.patches.v13_0.add_doctype_to_sla #14-06-2021
 dontmanageerp.patches.v13_0.bill_for_rejected_quantity_in_purchase_invoice
@@ -227,13 +220,9 @@ dontmanageerp.patches.v13_0.migrate_stripe_api
 dontmanageerp.patches.v13_0.reset_clearance_date_for_intracompany_payment_entries
 execute:dontmanage.reload_doc("dontmanageerp_integrations", "doctype", "TaxJar Settings")
 execute:dontmanage.reload_doc("dontmanageerp_integrations", "doctype", "Product Tax Category")
-dontmanageerp.patches.v13_0.custom_fields_for_taxjar_integration          #08-11-2021
 dontmanageerp.patches.v13_0.set_operation_time_based_on_operating_cost
 dontmanageerp.patches.v13_0.create_gst_payment_entry_fields #27-11-2021
 dontmanageerp.patches.v13_0.fix_invoice_statuses
-dontmanageerp.patches.v13_0.create_website_items #30-09-2021
-dontmanageerp.patches.v13_0.populate_e_commerce_settings
-dontmanageerp.patches.v13_0.make_homepage_products_website_items
 dontmanageerp.patches.v13_0.replace_supplier_item_group_with_party_specific_item
 dontmanageerp.patches.v13_0.update_dates_in_tax_withholding_category
 dontmanageerp.patches.v14_0.update_opportunity_currency_fields
@@ -250,28 +239,32 @@ dontmanageerp.patches.v12_0.update_production_plan_status
 dontmanageerp.patches.v13_0.healthcare_deprecation_warning
 dontmanageerp.patches.v13_0.item_naming_series_not_mandatory
 dontmanageerp.patches.v13_0.update_category_in_ltds_certificate
-dontmanageerp.patches.v13_0.fetch_thumbnail_in_website_items
 dontmanageerp.patches.v13_0.update_maintenance_schedule_field_in_visit
-dontmanageerp.patches.v13_0.create_ksa_vat_custom_fields # 07-01-2022
 dontmanageerp.patches.v14_0.migrate_crm_settings
-dontmanageerp.patches.v13_0.rename_ksa_qr_field
 dontmanageerp.patches.v13_0.wipe_serial_no_field_for_0_qty
-dontmanageerp.patches.v13_0.disable_ksa_print_format_for_others # 16-12-2021
 dontmanageerp.patches.v13_0.agriculture_deprecation_warning
 dontmanageerp.patches.v13_0.hospitality_deprecation_warning
 dontmanageerp.patches.v13_0.update_asset_quantity_field
 dontmanageerp.patches.v13_0.delete_bank_reconciliation_detail
 dontmanageerp.patches.v13_0.enable_provisional_accounting
 dontmanageerp.patches.v13_0.non_profit_deprecation_warning
-dontmanageerp.patches.v13_0.enable_ksa_vat_docs #1
 dontmanageerp.patches.v13_0.show_india_localisation_deprecation_warning
 dontmanageerp.patches.v13_0.show_hr_payroll_deprecation_warning
 dontmanageerp.patches.v13_0.reset_corrupt_defaults
 dontmanageerp.patches.v13_0.create_accounting_dimensions_for_asset_repair
+dontmanageerp.patches.v15_0.delete_taxjar_doctypes
+dontmanageerp.patches.v15_0.delete_ecommerce_doctypes
+dontmanageerp.patches.v15_0.create_asset_depreciation_schedules_from_assets
 dontmanageerp.patches.v14_0.update_reference_due_date_in_journal_entry
+dontmanageerp.patches.v15_0.saudi_depreciation_warning
+dontmanageerp.patches.v15_0.delete_saudi_doctypes
+dontmanageerp.patches.v14_0.show_loan_management_deprecation_warning
+dontmanageerp.patches.v14_0.clear_reconciliation_values_from_singles
+execute:dontmanage.rename_doc("Report", "TDS Payable Monthly", "Tax Withholding Details", force=True)
 
 [post_model_sync]
 execute:dontmanage.delete_doc_if_exists('Workspace', 'DontManageErp Integrations Settings')
+dontmanageerp.patches.v14_0.update_posting_datetime_and_dropped_indexes #22-02-2024
 dontmanageerp.patches.v14_0.rename_ongoing_status_in_sla_documents
 dontmanageerp.patches.v14_0.delete_shopify_doctypes
 dontmanageerp.patches.v14_0.delete_healthcare_doctypes
@@ -283,21 +276,15 @@ dontmanageerp.patches.v14_0.delete_datev_doctypes
 dontmanageerp.patches.v14_0.rearrange_company_fields
 dontmanageerp.patches.v13_0.update_sane_transfer_against
 dontmanageerp.patches.v14_0.migrate_cost_center_allocations
-dontmanageerp.patches.v13_0.convert_to_website_item_in_item_card_group_template
-dontmanageerp.patches.v13_0.shopping_cart_to_ecommerce
-dontmanageerp.patches.v13_0.update_disbursement_account
 dontmanageerp.patches.v13_0.update_reserved_qty_closed_wo
 dontmanageerp.patches.v13_0.update_exchange_rate_settings
 dontmanageerp.patches.v14_0.delete_amazon_mws_doctype
 dontmanageerp.patches.v13_0.set_work_order_qty_in_so_from_mr
-dontmanageerp.patches.v13_0.update_accounts_in_loan_docs
 dontmanageerp.patches.v13_0.item_reposting_for_incorrect_sl_and_gl
 dontmanageerp.patches.v14_0.update_batch_valuation_flag
 dontmanageerp.patches.v14_0.delete_non_profit_doctypes
-dontmanageerp.patches.v13_0.add_cost_center_in_loans
 dontmanageerp.patches.v13_0.set_return_against_in_pos_invoice_references
 dontmanageerp.patches.v13_0.remove_unknown_links_to_prod_plan_items # 24-03-2022
-dontmanageerp.patches.v13_0.copy_custom_field_filters_to_website_item
 dontmanageerp.patches.v13_0.change_default_item_manufacturer_fieldtype
 dontmanageerp.patches.v13_0.requeue_recoverable_reposts
 dontmanageerp.patches.v14_0.discount_accounting_separation
@@ -314,17 +301,60 @@ dontmanageerp.patches.v14_0.remove_hr_and_payroll_modules # 20-07-2022
 dontmanageerp.patches.v14_0.fix_crm_no_of_employees
 dontmanageerp.patches.v14_0.create_accounting_dimensions_in_subcontracting_doctypes
 dontmanageerp.patches.v14_0.fix_subcontracting_receipt_gl_entries
-dontmanageerp.patches.v13_0.update_schedule_type_in_loans
 dontmanageerp.patches.v13_0.drop_unused_sle_index_parts
 dontmanageerp.patches.v14_0.create_accounting_dimensions_for_asset_capitalization
 dontmanageerp.patches.v14_0.update_partial_tds_fields
 dontmanageerp.patches.v14_0.create_incoterms_and_migrate_shipment
-dontmanageerp.patches.v14_0.setup_clear_repost_logs
 dontmanageerp.patches.v14_0.create_accounting_dimensions_for_payment_request
 dontmanageerp.patches.v14_0.update_entry_type_for_journal_entry
 dontmanageerp.patches.v14_0.change_autoname_for_tax_withheld_vouchers
-dontmanageerp.patches.v14_0.update_asset_value_for_manual_depr_entries
 dontmanageerp.patches.v14_0.set_pick_list_status
 dontmanageerp.patches.v13_0.update_docs_link
-# below migration patches should always run last
+dontmanageerp.patches.v15_0.update_asset_value_for_manual_depr_entries
+dontmanageerp.patches.v15_0.update_gpa_and_ndb_for_assdeprsch
+dontmanageerp.patches.v14_0.create_accounting_dimensions_for_closing_balance
+dontmanageerp.patches.v14_0.update_closing_balances #14-07-2023
+execute:dontmanage.db.set_single_value("Accounts Settings", "merge_similar_account_heads", 0)
+dontmanageerp.patches.v14_0.update_reference_type_in_journal_entry_accounts
+dontmanageerp.patches.v14_0.update_subscription_details
+execute:dontmanage.delete_doc("Report", "Tax Detail", force=True)
+dontmanageerp.patches.v15_0.enable_all_leads
+dontmanageerp.patches.v14_0.update_company_in_ldc
+dontmanageerp.patches.v14_0.set_packed_qty_in_draft_delivery_notes
+execute:dontmanage.delete_doc('DocType', 'Cash Flow Mapping Template Details', ignore_missing=True)
+execute:dontmanage.delete_doc('DocType', 'Cash Flow Mapping', ignore_missing=True)
+execute:dontmanage.delete_doc('DocType', 'Cash Flow Mapper', ignore_missing=True)
+execute:dontmanage.delete_doc('DocType', 'Cash Flow Mapping Template', ignore_missing=True)
+execute:dontmanage.delete_doc('DocType', 'Cash Flow Mapping Accounts', ignore_missing=True)
+dontmanageerp.patches.v14_0.cleanup_workspaces
+dontmanageerp.patches.v15_0.remove_loan_management_module #2023-07-03
+dontmanageerp.patches.v14_0.set_report_in_process_SOA
+dontmanageerp.buying.doctype.supplier.patches.migrate_supplier_portal_users
+execute:dontmanage.defaults.clear_default("fiscal_year")
+dontmanageerp.patches.v15_0.remove_exotel_integration
+dontmanageerp.patches.v14_0.single_to_multi_dunning
+execute:dontmanage.db.set_single_value('Selling Settings', 'allow_negative_rates_for_items', 0)
+dontmanageerp.patches.v15_0.correct_asset_value_if_je_with_workflow
+dontmanageerp.patches.v15_0.delete_woocommerce_settings_doctype
+dontmanageerp.patches.v14_0.migrate_deferred_accounts_to_item_defaults
+dontmanageerp.patches.v14_0.update_invoicing_period_in_subscription
+execute:dontmanage.delete_doc("Page", "welcome-to-dontmanageerp")
+dontmanageerp.patches.v15_0.delete_payment_gateway_doctypes
+dontmanageerp.patches.v14_0.create_accounting_dimensions_in_sales_order_item
+dontmanageerp.patches.v15_0.update_sre_from_voucher_details
+dontmanageerp.patches.v14_0.rename_over_order_allowance_field
+dontmanageerp.patches.v14_0.migrate_delivery_stop_lock_field
+dontmanageerp.patches.v14_0.add_default_for_repost_settings
+dontmanageerp.patches.v15_0.rename_daily_depreciation_to_depreciation_amount_based_on_num_days_in_month
+dontmanageerp.patches.v15_0.rename_depreciation_amount_based_on_num_days_in_month_to_daily_prorata_based
+dontmanageerp.patches.v15_0.set_reserved_stock_in_bin
+dontmanageerp.patches.v14_0.create_accounting_dimensions_in_supplier_quotation
+dontmanageerp.patches.v14_0.update_zero_asset_quantity_field
+execute:dontmanage.db.set_single_value("Buying Settings", "project_update_frequency", "Each Transaction")
+dontmanageerp.patches.v14_0.update_total_asset_cost_field
+dontmanageerp.patches.v14_0.create_accounting_dimensions_in_reconciliation_tool
+# below migration patch should always run last
 dontmanageerp.patches.v14_0.migrate_gl_to_payment_ledger
+dontmanageerp.stock.doctype.delivery_note.patches.drop_unused_return_against_index # 2023-12-20
+dontmanageerp.patches.v14_0.set_maintain_stock_for_bom_item
+dontmanageerp.patches.v15_0.delete_orphaned_asset_movement_item_records

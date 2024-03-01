@@ -46,7 +46,7 @@ def set_priorities_service_level():
 
 		dontmanage.reload_doc("support", "doctype", "service_level")
 		dontmanage.reload_doc("support", "doctype", "support_settings")
-		dontmanage.db.set_value("Support Settings", None, "track_service_level_agreement", 1)
+		dontmanage.db.set_single_value("Support Settings", "track_service_level_agreement", 1)
 
 		for service_level in service_level_priorities:
 			if service_level:

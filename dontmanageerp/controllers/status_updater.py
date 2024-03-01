@@ -5,7 +5,7 @@
 import dontmanage
 from dontmanage import _
 from dontmanage.model.document import Document
-from dontmanage.utils import comma_or, flt, getdate, now, nowdate
+from dontmanage.utils import comma_or, flt, get_link_to_form, getdate, now, nowdate
 
 
 class OverAllowanceError(dontmanage.ValidationError):
@@ -47,15 +47,15 @@ status_map = {
 		],
 		[
 			"To Bill",
-			"eval:(self.per_delivered == 100 or self.skip_delivery_note) and self.per_billed < 100 and self.docstatus == 1",
+			"eval:(self.per_delivered >= 100 or self.skip_delivery_note) and self.per_billed < 100 and self.docstatus == 1",
 		],
 		[
 			"To Deliver",
-			"eval:self.per_delivered < 100 and self.per_billed == 100 and self.docstatus == 1 and not self.skip_delivery_note",
+			"eval:self.per_delivered < 100 and self.per_billed >= 100 and self.docstatus == 1 and not self.skip_delivery_note",
 		],
 		[
 			"Completed",
-			"eval:(self.per_delivered == 100 or self.skip_delivery_note) and self.per_billed == 100 and self.docstatus == 1",
+			"eval:(self.per_delivered >= 100 or self.skip_delivery_note) and self.per_billed >= 100 and self.docstatus == 1",
 		],
 		["Cancelled", "eval:self.docstatus==2"],
 		["Closed", "eval:self.status=='Closed' and self.docstatus != 2"],
@@ -91,7 +91,8 @@ status_map = {
 	],
 	"Purchase Receipt": [
 		["Draft", None],
-		["To Bill", "eval:self.per_billed < 100 and self.docstatus == 1"],
+		["To Bill", "eval:self.per_billed == 0 and self.docstatus == 1"],
+		["Partly Billed", "eval:self.per_billed > 0 and self.per_billed < 100 and self.docstatus == 1"],
 		["Return Issued", "eval:self.per_returned == 100 and self.docstatus == 1"],
 		["Completed", "eval:self.per_billed == 100 and self.docstatus == 1"],
 		["Cancelled", "eval:self.docstatus==2"],
@@ -130,11 +131,6 @@ status_map = {
 			"Manufactured",
 			"eval:self.status != 'Stopped' and self.per_ordered == 100 and self.docstatus == 1 and self.material_request_type == 'Manufacture'",
 		],
-	],
-	"Bank Transaction": [
-		["Unreconciled", "eval:self.docstatus == 1 and self.unallocated_amount>0"],
-		["Reconciled", "eval:self.docstatus == 1 and self.unallocated_amount<=0"],
-		["Cancelled", "eval:self.docstatus == 2"],
 	],
 	"POS Opening Entry": [
 		["Draft", None],
@@ -232,6 +228,18 @@ class StatusUpdater(Document):
 
 				if hasattr(d, "qty") and d.qty > 0 and self.get("is_return"):
 					dontmanage.throw(_("For an item {0}, quantity must be negative number").format(d.item_code))
+
+				if not dontmanage.db.get_single_value("Selling Settings", "allow_negative_rates_for_items"):
+					if hasattr(d, "item_code") and hasattr(d, "rate") and flt(d.rate) < 0:
+						dontmanage.throw(
+							_(
+								"For item {0}, rate must be a positive number. To Allow negative rates, enable {1} in {2}"
+							).format(
+								dontmanage.bold(d.item_code),
+								dontmanage.bold(_("`Allow Negative rates for Items`")),
+								get_link_to_form("Selling Settings", "Selling Settings"),
+							),
+						)
 
 				if d.doctype == args["source_dt"] and d.get(args["join_field"]):
 					args["name"] = d.get(args["join_field"])
@@ -464,7 +472,7 @@ class StatusUpdater(Document):
 					ifnull((select
 						ifnull(sum(case when abs(%(target_ref_field)s) > abs(%(target_field)s) then abs(%(target_field)s) else abs(%(target_ref_field)s) end), 0)
 						/ sum(abs(%(target_ref_field)s)) * 100
-					from `tab%(target_dt)s` where parent='%(name)s' having sum(abs(%(target_ref_field)s)) > 0), 0), 6)
+					from `tab%(target_dt)s` where parent='%(name)s' and parenttype='%(target_parent_dt)s' having sum(abs(%(target_ref_field)s)) > 0), 0), 6)
 					%(update_modified)s
 				where name='%(name)s'"""
 				% args

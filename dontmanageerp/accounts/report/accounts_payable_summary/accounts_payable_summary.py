@@ -9,7 +9,7 @@ from dontmanageerp.accounts.report.accounts_receivable_summary.accounts_receivab
 
 def execute(filters=None):
 	args = {
-		"party_type": "Supplier",
+		"account_type": "Payable",
 		"naming_by": ["Buying Settings", "supp_master_name"],
 	}
 	return AccountsReceivableSummary(filters).run(args)

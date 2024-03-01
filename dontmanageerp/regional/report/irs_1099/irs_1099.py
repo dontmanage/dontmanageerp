@@ -10,7 +10,7 @@ from dontmanage.utils.data import fmt_money
 from dontmanage.utils.jinja import render_template
 from dontmanage.utils.pdf import get_pdf
 from dontmanage.utils.print_format import read_multi_pdf
-from PyPDF2 import PdfWriter
+from pypdf import PdfWriter
 
 from dontmanageerp.accounts.utils import get_fiscal_year
 

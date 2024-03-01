@@ -21,6 +21,10 @@ def boot_session(bootinfo):
 		bootinfo.sysdefaults.allow_stale = cint(
 			dontmanage.db.get_single_value("Accounts Settings", "allow_stale")
 		)
+		bootinfo.sysdefaults.over_billing_allowance = dontmanage.db.get_single_value(
+			"Accounts Settings", "over_billing_allowance"
+		)
+
 		bootinfo.sysdefaults.quotation_valid_till = cint(
 			dontmanage.db.get_single_value("CRM Settings", "default_valid_till")
 		)
@@ -57,6 +61,8 @@ def boot_session(bootinfo):
 		)
 		bootinfo.party_account_types = dontmanage._dict(party_account_types)
 
+		bootinfo.sysdefaults.demo_company = dontmanage.db.get_single_value("Global Defaults", "demo_company")
+
 
 def update_page_info(bootinfo):
 	bootinfo.page_info.update(
@@ -69,3 +75,11 @@ def update_page_info(bootinfo):
 			"Sales Person Tree": {"title": "Sales Person Tree", "route": "Tree/Sales Person"},
 		}
 	)
+
+
+def bootinfo(bootinfo):
+	if bootinfo.get("user") and bootinfo["user"].get("name"):
+		bootinfo["user"]["employee"] = ""
+		employee = dontmanage.db.get_value("Employee", {"user_id": bootinfo["user"]["name"]}, "name")
+		if employee:
+			bootinfo["user"]["employee"] = employee

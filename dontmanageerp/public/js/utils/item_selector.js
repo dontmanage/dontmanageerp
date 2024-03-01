@@ -97,14 +97,14 @@ dontmanageerp.ItemSelector = class ItemSelector {
 		}
 
 		var me = this;
-		dontmanage.link_search("Item", args, function(r) {
-			$.each(r.values, function(i, d) {
+		dontmanage.link_search("Item", args, function(results) {
+			$.each(results, function(i, d) {
 				if(!d.image) {
 					d.abbr = dontmanage.get_abbr(d.item_name);
 					d.color = dontmanage.get_palette(d.item_name);
 				}
 			});
-			me.dialog.results.html(dontmanage.render_template('item_selector', {'data':r.values}));
+			me.dialog.results.html(dontmanage.render_template('item_selector', {'data': results}));
 		});
 	}
 };

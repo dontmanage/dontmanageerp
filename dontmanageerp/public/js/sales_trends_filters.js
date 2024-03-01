@@ -48,7 +48,7 @@ dontmanageerp.get_sales_trends_filters = function() {
 			"label": __("Fiscal Year"),
 			"fieldtype": "Link",
 			"options":'Fiscal Year',
-			"default": dontmanage.sys_defaults.fiscal_year
+			"default": dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today()),
 		},
 		{
 			"fieldname":"company",

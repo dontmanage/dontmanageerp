@@ -11,8 +11,7 @@ def execute():
 
 	dontmanage.reload_doc("crm", "doctype", "crm_settings")
 	if settings:
-		dontmanage.db.set_value(
-			"CRM Settings",
+		dontmanage.db.set_single_value(
 			"CRM Settings",
 			{
 				"campaign_naming_by": settings.campaign_naming_by,

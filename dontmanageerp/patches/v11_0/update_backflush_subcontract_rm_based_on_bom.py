@@ -7,8 +7,8 @@ import dontmanage
 
 def execute():
 	dontmanage.reload_doc("buying", "doctype", "buying_settings")
-	dontmanage.db.set_value(
-		"Buying Settings", None, "backflush_raw_materials_of_subcontract_based_on", "BOM"
+	dontmanage.db.set_single_value(
+		"Buying Settings", "backflush_raw_materials_of_subcontract_based_on", "BOM"
 	)
 
 	dontmanage.reload_doc("stock", "doctype", "stock_entry_detail")

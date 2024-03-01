@@ -1,13 +1,6 @@
 dontmanage.ui.form.on("Issue", {
 	onload: function(frm) {
 		frm.email_field = "raised_by";
-		frm.set_query("customer", function () {
-			return {
-				filters: {
-					"disabled": 0
-				}
-			};
-		});
 
 		dontmanage.db.get_value("Support Settings", {name: "Support Settings"},
 			["allow_resetting_service_level_agreement", "track_service_level_agreement"], (r) => {
@@ -65,7 +58,9 @@ dontmanage.ui.form.on("Issue", {
 
 				dontmanage.call("dontmanageerp.support.doctype.service_level_agreement.service_level_agreement.reset_service_level_agreement", {
 					reason: values.reason,
-					user: dontmanage.session.user_email
+					user: dontmanage.session.user_email,
+					doctype: frm.doc.doctype,
+					docname: frm.doc.name,
 				}, () => {
 					reset_sla.enable_primary_action();
 					frm.refresh();

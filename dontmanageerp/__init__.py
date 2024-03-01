@@ -1,8 +1,9 @@
+import functools
 import inspect
 
 import dontmanage
 
-__version__ = "14.19.0"
+__version__ = "15.15.0"
 
 
 def get_default_company(user=None):
@@ -120,12 +121,14 @@ def get_region(company=None):
 
 	You can also set global company flag in `dontmanage.flags.company`
 	"""
-	if company or dontmanage.flags.company:
-		return dontmanage.get_cached_value("Company", company or dontmanage.flags.company, "country")
-	elif dontmanage.flags.country:
-		return dontmanage.flags.country
-	else:
-		return dontmanage.get_system_settings("country")
+
+	if not company:
+		company = dontmanage.local.flags.company
+
+	if company:
+		return dontmanage.get_cached_value("Company", company, "country")
+
+	return dontmanage.flags.country or dontmanage.get_system_settings("country")
 
 
 def allow_regional(fn):
@@ -136,6 +139,7 @@ def allow_regional(fn):
 	def myfunction():
 	  pass"""
 
+	@functools.wraps(fn)
 	def caller(*args, **kwargs):
 		overrides = dontmanage.get_hooks("regional_overrides", {}).get(get_region())
 		function_path = f"{inspect.getmodule(fn).__name__}.{fn.__name__}"

@@ -182,4 +182,4 @@ def set_depreciation_settings_in_company():
 	company.save()
 
 	# Enable booking asset depreciation entry automatically
-	dontmanage.db.set_value("Accounts Settings", None, "book_asset_depreciation_entry_automatically", 1)
+	dontmanage.db.set_single_value("Accounts Settings", "book_asset_depreciation_entry_automatically", 1)

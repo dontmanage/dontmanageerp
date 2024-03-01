@@ -18,3 +18,22 @@ cur_frm.cscript.onload = function() {
 dontmanage.ui.form.on("Serial No", "refresh", function(frm) {
 	frm.toggle_enable("item_code", frm.doc.__islocal);
 });
+
+
+dontmanage.ui.form.on("Serial No", {
+	refresh(frm) {
+		frm.trigger("view_ledgers")
+	},
+
+	view_ledgers(frm) {
+		frm.add_custom_button(__("View Ledgers"), () => {
+			dontmanage.route_options = {
+				"item_code": frm.doc.item_code,
+				"serial_no": frm.doc.name,
+				"posting_date": dontmanage.datetime.now_date(),
+				"posting_time": dontmanage.datetime.now_time()
+			};
+			dontmanage.set_route("query-report", "Serial No Ledger");
+		}).addClass('btn-primary');
+	}
+})

@@ -49,7 +49,7 @@ dontmanage.ui.form.on('Asset Value Adjustment', {
 			frm.call({
 				method: "dontmanageerp.assets.doctype.asset.asset.get_asset_value_after_depreciation",
 				args: {
-					asset: frm.doc.asset,
+					asset_name: frm.doc.asset,
 					finance_book: frm.doc.finance_book
 				},
 				callback: function(r) {

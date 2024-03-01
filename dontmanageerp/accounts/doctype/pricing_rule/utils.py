@@ -127,6 +127,12 @@ def _get_pricing_rules(apply_on, args, values):
 				values["variant_of"] = args.variant_of
 	elif apply_on_field == "item_group":
 		item_conditions = _get_tree_conditions(args, "Item Group", child_doc, False)
+		if args.get("uom", None):
+			item_conditions += (
+				" and ({child_doc}.uom='{item_uom}' or IFNULL({child_doc}.uom, '')='')".format(
+					child_doc=child_doc, item_uom=args.get("uom")
+				)
+			)
 
 	conditions += get_other_conditions(conditions, values, args)
 	warehouse_conditions = _get_tree_conditions(args, "Warehouse", "`tabPricing Rule`")
@@ -521,7 +527,7 @@ def get_qty_amount_data_for_cumulative(pr_doc, doc, items=None):
 		values.extend(warehouses)
 
 	if items:
-		condition = " and `tab{child_doc}`.{apply_on} in ({items})".format(
+		condition += " and `tab{child_doc}`.{apply_on} in ({items})".format(
 			child_doc=child_doctype, apply_on=apply_on, items=",".join(["%s"] * len(items))
 		)
 
@@ -575,6 +581,8 @@ def apply_pricing_rule_on_transaction(doc):
 			if d.price_or_product_discount == "Price":
 				if d.apply_discount_on:
 					doc.set("apply_discount_on", d.apply_discount_on)
+				# Variable to track whether the condition has been met
+				condition_met = False
 
 				for field in ["additional_discount_percentage", "discount_amount"]:
 					pr_field = "discount_percentage" if field == "additional_discount_percentage" else field
@@ -597,6 +605,11 @@ def apply_pricing_rule_on_transaction(doc):
 							if coupon_code_pricing_rule == d.name:
 								# if selected coupon code is linked with pricing rule
 								doc.set(field, d.get(pr_field))
+
+								# Set the condition_met variable to True and break out of the loop
+								condition_met = True
+								break
+
 							else:
 								# reset discount if not linked
 								doc.set(field, 0)
@@ -605,6 +618,10 @@ def apply_pricing_rule_on_transaction(doc):
 							doc.set(field, 0)
 
 				doc.calculate_taxes_and_totals()
+
+				# Break out of the main loop if the condition is met
+				if condition_met:
+					break
 			elif d.price_or_product_discount == "Product":
 				item_details = dontmanage._dict({"parenttype": doc.doctype, "free_item_data": []})
 				get_product_discount_rule(d, item_details, doc=doc)

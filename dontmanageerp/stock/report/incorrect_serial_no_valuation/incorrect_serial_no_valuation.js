@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Incorrect Serial No Valuation"] = {
 	"filters": [
@@ -22,14 +22,14 @@ dontmanage.query_reports["Incorrect Serial No Valuation"] = {
 			fieldtype: 'Date',
 			fieldname: 'from_date',
 			reqd: 1,
-			default: dontmanage.defaults.get_user_default("year_start_date")
+			default: dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[1],
 		},
 		{
 			label: __('To Date'),
 			fieldtype: 'Date',
 			fieldname: 'to_date',
 			reqd: 1,
-			default: dontmanage.defaults.get_user_default("year_end_date")
+			default: dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[2],
 		}
 	]
 };

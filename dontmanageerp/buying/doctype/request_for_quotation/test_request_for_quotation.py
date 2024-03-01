@@ -2,11 +2,14 @@
 # See license.txt
 
 
+from urllib.parse import urlparse
+
 import dontmanage
 from dontmanage.tests.utils import DontManageTestCase
 from dontmanage.utils import nowdate
 
 from dontmanageerp.buying.doctype.request_for_quotation.request_for_quotation import (
+	RequestforQuotation,
 	create_supplier_quotation,
 	get_pdf,
 	make_supplier_quotation_from_rfq,
@@ -125,13 +128,45 @@ class TestRequestforQuotation(DontManageTestCase):
 		rfq.status = "Draft"
 		rfq.submit()
 
+	def test_get_link(self):
+		rfq = make_request_for_quotation()
+		parsed_link = urlparse(rfq.get_link())
+		self.assertEqual(parsed_link.path, f"/rfq/{rfq.name}")
+
 	def test_get_pdf(self):
 		rfq = make_request_for_quotation()
 		get_pdf(rfq.name, rfq.get("suppliers")[0].supplier)
 		self.assertEqual(dontmanage.local.response.type, "pdf")
 
+	def test_portal_user_with_new_supplier(self):
+		supplier_doc = dontmanage.get_doc(
+			{
+				"doctype": "Supplier",
+				"supplier_name": "Test Supplier for RFQ",
+				"supplier_group": "_Test Supplier Group",
+			}
+		).insert()
 
-def make_request_for_quotation(**args):
+		self.assertFalse(supplier_doc.portal_users)
+
+		rfq = make_request_for_quotation(
+			supplier_data=[
+				{
+					"supplier": supplier_doc.name,
+					"supplier_name": supplier_doc.supplier_name,
+					"email_id": "123_testrfquser@example.com",
+				}
+			],
+			do_not_submit=True,
+		)
+		for rfq_supplier in rfq.suppliers:
+			rfq.update_supplier_contact(rfq_supplier, rfq.get_link())
+
+		supplier_doc.reload()
+		self.assertTrue(supplier_doc.portal_users[0].user)
+
+
+def make_request_for_quotation(**args) -> "RequestforQuotation":
 	"""
 	:param supplier_data: List containing supplier data
 	"""

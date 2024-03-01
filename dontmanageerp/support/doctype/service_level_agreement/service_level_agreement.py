@@ -13,14 +13,15 @@ from dontmanage.utils import (
 	get_datetime,
 	get_datetime_str,
 	get_link_to_form,
+	get_system_timezone,
 	get_time,
-	get_time_zone,
 	get_weekdays,
 	getdate,
 	nowdate,
 	time_diff_in_seconds,
 	to_timedelta,
 )
+from dontmanage.utils.caching import redis_cache
 from dontmanage.utils.nestedset import get_ancestors_of
 from dontmanage.utils.safe_exec import get_safe_globals
 
@@ -28,6 +29,41 @@ from dontmanageerp.support.doctype.issue.issue import get_holidays
 
 
 class ServiceLevelAgreement(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.support.doctype.pause_sla_on_status.pause_sla_on_status import PauseSLAOnStatus
+		from dontmanageerp.support.doctype.service_day.service_day import ServiceDay
+		from dontmanageerp.support.doctype.service_level_priority.service_level_priority import (
+			ServiceLevelPriority,
+		)
+		from dontmanageerp.support.doctype.sla_fulfilled_on_status.sla_fulfilled_on_status import (
+			SLAFulfilledOnStatus,
+		)
+
+		apply_sla_for_resolution: DF.Check
+		condition: DF.Code | None
+		default_priority: DF.Link | None
+		default_service_level_agreement: DF.Check
+		document_type: DF.Link
+		enabled: DF.Check
+		end_date: DF.Date | None
+		entity: DF.DynamicLink | None
+		entity_type: DF.Literal["", "Customer", "Customer Group", "Territory"]
+		holiday_list: DF.Link
+		pause_sla_on: DF.Table[PauseSLAOnStatus]
+		priorities: DF.Table[ServiceLevelPriority]
+		service_level: DF.Data
+		sla_fulfilled_on: DF.Table[SLAFulfilledOnStatus]
+		start_date: DF.Date | None
+		support_and_resolution: DF.Table[ServiceDay]
+	# end: auto-generated types
+
 	def validate(self):
 		self.validate_selected_doctype()
 		self.validate_doc()
@@ -208,6 +244,10 @@ class ServiceLevelAgreement(Document):
 
 	def on_update(self):
 		set_documents_with_active_service_level_agreement()
+
+	def clear_cache(self):
+		get_sla_doctypes.clear_cache()
+		return super().clear_cache()
 
 	def create_docfields(self, meta, service_level_agreement_fields):
 		last_index = len(meta.fields)
@@ -734,10 +774,12 @@ def get_response_and_resolution_duration(doc):
 	return priority
 
 
-def reset_service_level_agreement(doc, reason, user):
+@dontmanage.whitelist()
+def reset_service_level_agreement(doctype: str, docname: str, reason, user):
 	if not dontmanage.db.get_single_value("Support Settings", "allow_resetting_service_level_agreement"):
 		dontmanage.throw(_("Allow Resetting Service Level Agreement from Support Settings."))
 
+	doc = dontmanage.get_doc(doctype, docname)
 	dontmanage.get_doc(
 		{
 			"doctype": "Comment",
@@ -774,6 +816,9 @@ def on_communication_update(doc, status):
 		return
 
 	if not parent.meta.has_field("service_level_agreement"):
+		return
+
+	if not parent.get("service_level_agreement"):
 		return
 
 	if (
@@ -978,7 +1023,7 @@ def convert_utc_to_user_timezone(utc_timestamp, user):
 
 
 def get_tz(user):
-	return dontmanage.db.get_value("User", user, "time_zone") or get_time_zone()
+	return dontmanage.db.get_value("User", user, "time_zone") or get_system_timezone()
 
 
 @dontmanage.whitelist()
@@ -987,6 +1032,7 @@ def get_user_time(user, to_string=False):
 
 
 @dontmanage.whitelist()
+@redis_cache()
 def get_sla_doctypes():
 	doctypes = []
 	data = dontmanage.get_all("Service Level Agreement", {"enabled": 1}, ["document_type"], distinct=1)
@@ -995,3 +1041,7 @@ def get_sla_doctypes():
 		doctypes.append(entry.document_type)
 
 	return doctypes
+
+
+def add_sla_doctypes(bootinfo):
+	bootinfo.service_level_agreement_doctypes = get_sla_doctypes()

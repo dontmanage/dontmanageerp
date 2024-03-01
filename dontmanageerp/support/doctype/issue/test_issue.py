@@ -20,7 +20,7 @@ class TestSetUp(unittest.TestCase):
 		dontmanage.db.sql("delete from `tabSLA Fulfilled On Status`")
 		dontmanage.db.sql("delete from `tabPause SLA On Status`")
 		dontmanage.db.sql("delete from `tabService Day`")
-		dontmanage.db.set_value("Support Settings", None, "track_service_level_agreement", 1)
+		dontmanage.db.set_single_value("Support Settings", "track_service_level_agreement", 1)
 		create_service_level_agreements_for_issues()
 
 

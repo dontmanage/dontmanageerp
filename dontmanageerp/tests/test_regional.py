@@ -14,6 +14,3 @@ class TestInit(unittest.TestCase):
 	def test_regional_overrides(self):
 		dontmanage.flags.country = "Maldives"
 		self.assertEqual(test_method(), "original")
-
-		dontmanage.flags.country = "France"
-		self.assertEqual(test_method(), "overridden")

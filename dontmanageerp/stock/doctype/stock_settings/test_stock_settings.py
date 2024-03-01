@@ -10,7 +10,7 @@ from dontmanage.tests.utils import DontManageTestCase
 class TestStockSettings(DontManageTestCase):
 	def setUp(self):
 		super().setUp()
-		dontmanage.db.set_value("Stock Settings", None, "clean_description_html", 0)
+		dontmanage.db.set_single_value("Stock Settings", "clean_description_html", 0)
 
 	def test_settings(self):
 		item = dontmanage.get_doc(

@@ -6,6 +6,10 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 	setup() {
 		super.setup();
 		let me = this;
+
+		this.set_fields_onload_for_line_item();
+		this.frm.ignore_doctypes_on_cancel_all = ['Serial and Batch Bundle'];
+
 		dontmanage.flags.hide_serial_batch_dialog = true;
 		dontmanage.ui.form.on(this.frm.doctype + " Item", "rate", function(frm, cdt, cdn) {
 			var item = dontmanage.get_doc(cdt, cdn);
@@ -115,12 +119,33 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 					item.from_warehouse = frm.doc.set_from_warehouse;
 				}
 
+				if (item.docstatus === 0
+					&& dontmanage.meta.has_field(item.doctype, "use_serial_batch_fields")
+					&& cint(dontmanage.user_defaults?.use_serial_batch_fields) === 1
+				) {
+					dontmanage.model.set_value(item.doctype, item.name, "use_serial_batch_fields", 1);
+				}
+
 				dontmanageerp.accounts.dimensions.copy_dimension_from_first_row(frm, cdt, cdn, 'items');
 			}
 		});
 
-		if(this.frm.fields_dict["items"].grid.get_field('batch_no')) {
-			this.frm.set_query("batch_no", "items", function(doc, cdt, cdn) {
+		if(this.frm.fields_dict["items"].grid.get_field('serial_and_batch_bundle')) {
+			this.frm.set_query("serial_and_batch_bundle", "items", function(doc, cdt, cdn) {
+				let item_row = locals[cdt][cdn];
+				return {
+					filters: {
+						'item_code': item_row.item_code,
+						'voucher_type': doc.doctype,
+						'voucher_no': ["in", [doc.name, ""]],
+						'is_cancelled': 0,
+					}
+				}
+			});
+		}
+
+		if(this.frm.fields_dict['items'].grid.get_field('batch_no')) {
+			this.frm.set_query('batch_no', 'items', function(doc, cdt, cdn) {
 				return me.set_query_for_batch(doc, cdt, cdn);
 			});
 		}
@@ -140,7 +165,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		}
 
 		if(this.frm.fields_dict["items"]) {
-			this["items_remove"] = this.calculate_net_weight;
+			this["items_remove"] = this.process_item_removal;
 		}
 
 		if(this.frm.fields_dict["recurring_print_format"]) {
@@ -173,7 +198,9 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 			this.frm.set_query("expense_account", "items", function(doc) {
 				return {
 					filters: {
-						"company": doc.company
+						"company": doc.company,
+						"report_type": "Profit and Loss",
+						"is_group": 0
 					}
 				};
 			});
@@ -183,15 +210,6 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 			this.frm.set_indicator_formatter('pricing_rule', function(doc) {
 				return (doc.rule_applied) ? "green" : "red";
 			});
-		}
-
-		let batch_no_field = this.frm.get_docfield("items", "batch_no");
-		if (batch_no_field) {
-			batch_no_field.get_route_options_for_new_doc = function(row) {
-				return {
-					"item": row.doc.item_code
-				}
-			};
 		}
 
 		if (this.frm.fields_dict["items"].grid.get_field('blanket_order')) {
@@ -218,8 +236,28 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 				};
 			});
 		}
-
 	}
+
+	set_fields_onload_for_line_item() {
+		if (this.frm.is_new() && this.frm.doc?.items) {
+			this.frm.doc.items.forEach(item => {
+				if (item.docstatus === 0
+					&& dontmanage.meta.has_field(item.doctype, "use_serial_batch_fields")
+					&& cint(dontmanage.user_defaults?.use_serial_batch_fields) === 1
+				) {
+					dontmanage.model.set_value(item.doctype, item.name, "use_serial_batch_fields", 1);
+				}
+			})
+		}
+	}
+
+	toggle_enable_for_stock_uom(field) {
+		dontmanage.db.get_single_value('Stock Settings', field)
+		.then(value => {
+			this.frm.fields_dict["items"].grid.toggle_enable("stock_qty", value);
+		});
+	}
+
 	onload() {
 		var me = this;
 
@@ -246,6 +284,28 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 				}
 			]);
 		}
+
+		if(this.frm.fields_dict['items'].grid.get_field('serial_and_batch_bundle')) {
+			let sbb_field = this.frm.get_docfield('items', 'serial_and_batch_bundle');
+			if (sbb_field) {
+				sbb_field.get_route_options_for_new_doc = (row) => {
+					return {
+						'item_code': row.doc.item_code,
+					}
+				};
+			}
+		}
+
+		if(this.frm.fields_dict['items'].grid.get_field('batch_no')) {
+			let batch_no_field = this.frm.get_docfield('items', 'batch_no');
+			if (batch_no_field) {
+				batch_no_field.get_route_options_for_new_doc = function(row) {
+					return {
+						'item': row.doc.item_code
+					}
+				};
+			}
+		}
 	}
 
 	is_return() {
@@ -255,7 +315,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 	}
 
 	setup_quality_inspection() {
-		if(!in_list(["Delivery Note", "Sales Invoice", "Purchase Receipt", "Purchase Invoice"], this.frm.doc.doctype)) {
+		if(!in_list(["Delivery Note", "Sales Invoice", "Purchase Receipt", "Purchase Invoice", "Subcontracting Receipt"], this.frm.doc.doctype)) {
 			return;
 		}
 
@@ -267,12 +327,12 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 			this.frm.page.set_inner_btn_group_as_primary(__('Create'));
 		}
 
-		const inspection_type = in_list(["Purchase Receipt", "Purchase Invoice"], this.frm.doc.doctype)
+		const inspection_type = in_list(["Purchase Receipt", "Purchase Invoice", "Subcontracting Receipt"], this.frm.doc.doctype)
 			? "Incoming" : "Outgoing";
 
 		let quality_inspection_field = this.frm.get_docfield("items", "quality_inspection");
 		quality_inspection_field.get_route_options_for_new_doc = function(row) {
-			if(me.frm.is_new()) return;
+			if(me.frm.is_new()) return {};
 			return {
 				"inspection_type": inspection_type,
 				"reference_type": me.frm.doc.doctype,
@@ -323,7 +383,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 
 	onload_post_render() {
 		if(this.frm.doc.__islocal && !(this.frm.doc.taxes || []).length
-			&& !(this.frm.doc.__onload ? this.frm.doc.__onload.load_after_mapping : false)) {
+			&& !this.frm.doc.__onload?.load_after_mapping) {
 			dontmanage.after_ajax(() => this.apply_default_taxes());
 		} else if(this.frm.doc.__islocal && this.frm.doc.company && this.frm.doc["items"]
 			&& !this.frm.doc.is_pos) {
@@ -337,14 +397,16 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 
 	refresh() {
 		dontmanageerp.toggle_naming_series();
-		dontmanageerp.hide_company();
+		dontmanageerp.hide_company(this.frm);
 		this.set_dynamic_labels();
 		this.setup_sms();
 		this.setup_quality_inspection();
 		this.validate_has_items();
+		dontmanageerp.utils.view_serial_batch_nos(this.frm);
 	}
 
 	scan_barcode() {
+		dontmanage.flags.dialog_set = false;
 		const barcode_scanner = new dontmanageerp.utils.BarcodeScanner({frm:this.frm});
 		barcode_scanner.process_scan();
 	}
@@ -418,14 +480,19 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		item.weight_uom = '';
 		item.conversion_factor = 0;
 
-		if(['Sales Invoice'].includes(this.frm.doc.doctype)) {
+		if(['Sales Invoice', 'Purchase Invoice'].includes(this.frm.doc.doctype)) {
 			update_stock = cint(me.frm.doc.update_stock);
 			show_batch_dialog = update_stock;
 
-		} else if((this.frm.doc.doctype === 'Purchase Receipt' && me.frm.doc.is_return) ||
+		} else if((this.frm.doc.doctype === 'Purchase Receipt') ||
 			this.frm.doc.doctype === 'Delivery Note') {
 			show_batch_dialog = 1;
 		}
+
+		if (show_batch_dialog && item.use_serial_batch_fields === 1) {
+			show_batch_dialog = 0;
+		}
+
 		item.barcode = null;
 
 
@@ -466,6 +533,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 							project: item.project || me.frm.doc.project,
 							qty: item.qty || 1,
 							net_rate: item.rate,
+							base_net_rate: item.base_net_rate,
 							stock_qty: item.stock_qty,
 							conversion_factor: item.conversion_factor,
 							weight_per_unit: item.weight_per_unit,
@@ -477,6 +545,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 							cost_center: item.cost_center,
 							tax_category: me.frm.doc.tax_category,
 							item_tax_template: item.item_tax_template,
+							child_doctype: item.doctype,
 							child_docname: item.name,
 							is_old_subcontracting_flow: me.frm.doc.is_old_subcontracting_flow,
 						}
@@ -494,7 +563,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 								},
 								() => {
 									// for internal customer instead of pricing rule directly apply valuation rate on item
-									if (me.frm.doc.is_internal_customer || me.frm.doc.is_internal_supplier) {
+									if ((me.frm.doc.is_internal_customer || me.frm.doc.is_internal_supplier) && me.frm.doc.represents_company === me.frm.doc.company) {
 										me.get_incoming_rate(item, me.frm.posting_date, me.frm.posting_time,
 											me.frm.doc.doctype, me.frm.doc.company);
 									} else {
@@ -508,12 +577,14 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 								},
 								() => me.toggle_conversion_factor(item),
 								() => {
-									if (show_batch_dialog)
+									if (show_batch_dialog && !dontmanage.flags.trigger_from_barcode_scanner)
 										return dontmanage.db.get_value("Item", item.item_code, ["has_batch_no", "has_serial_no"])
 											.then((r) => {
 												if (r.message &&
 												(r.message.has_batch_no || r.message.has_serial_no)) {
 													dontmanage.flags.hide_serial_batch_dialog = false;
+												} else {
+													show_batch_dialog = false;
 												}
 											});
 								},
@@ -528,7 +599,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 											});
 								},
 								() => {
-									if(show_batch_dialog && !dontmanage.flags.hide_serial_batch_dialog) {
+									if(show_batch_dialog && !dontmanage.flags.hide_serial_batch_dialog && !dontmanage.flags.dialog_set) {
 										var d = locals[cdt][cdn];
 										$.each(r.message, function(k, v) {
 											if(!d[k]) d[k] = v;
@@ -538,12 +609,15 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 											d.batch_no = undefined;
 										}
 
+										dontmanage.flags.dialog_set = true;
 										dontmanageerp.show_serial_batch_selector(me.frm, d, (item) => {
 											me.frm.script_manager.trigger('qty', item.doctype, item.name);
 											if (!me.frm.doc.set_warehouse)
 												me.frm.script_manager.trigger('warehouse', item.doctype, item.name);
 											me.apply_price_list(item, true);
 										}, undefined, !dontmanage.flags.hide_serial_batch_dialog);
+									} else {
+										dontmanage.flags.dialog_set = false;
 									}
 								},
 								() => me.conversion_factor(doc, cdt, cdn, true),
@@ -663,12 +737,27 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 				item.serial_no = item.serial_no.replace(/,/g, '\n');
 				item.conversion_factor = item.conversion_factor || 1;
 				refresh_field("serial_no", item.name, item.parentfield);
-				if (!doc.is_return && cint(dontmanage.user_defaults.set_qty_in_transactions_based_on_serial_no_input)) {
+				if (!doc.is_return) {
 					setTimeout(() => {
 						me.update_qty(cdt, cdn);
-					}, 10000);
+					}, 3000);
 				}
 			}
+		}
+	}
+
+	on_submit() {
+		if (in_list(["Purchase Invoice", "Sales Invoice"], this.frm.doc.doctype)
+			&& !this.frm.doc.update_stock) {
+			return;
+		}
+
+		this.refresh_serial_batch_bundle_field();
+	}
+
+	refresh_serial_batch_bundle_field() {
+		dontmanage.route_hooks.after_submit = (frm_obj) => {
+			frm_obj.reload_doc();
 		}
 	}
 
@@ -733,24 +822,25 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 				if (me.frm.doc.price_list_currency == company_currency) {
 					me.frm.set_value('plc_conversion_rate', 1.0);
 				}
-				if (company_doc.default_letter_head) {
-					if(me.frm.fields_dict.letter_head) {
-						me.frm.set_value("letter_head", company_doc.default_letter_head);
+				if (company_doc){
+					if (company_doc.default_letter_head) {
+						if(me.frm.fields_dict.letter_head) {
+							me.frm.set_value("letter_head", company_doc.default_letter_head);
+						}
+					}
+					let selling_doctypes_for_tc = ["Sales Invoice", "Quotation", "Sales Order", "Delivery Note"];
+					if (company_doc.default_selling_terms && dontmanage.meta.has_field(me.frm.doc.doctype, "tc_name") &&
+					selling_doctypes_for_tc.includes(me.frm.doc.doctype)  && !me.frm.doc.tc_name) {
+						me.frm.set_value("tc_name", company_doc.default_selling_terms);
+					}
+					let buying_doctypes_for_tc = ["Request for Quotation", "Supplier Quotation", "Purchase Order",
+						"Material Request", "Purchase Receipt"];
+					// Purchase Invoice is excluded as per issue #3345
+					if (company_doc.default_buying_terms && dontmanage.meta.has_field(me.frm.doc.doctype, "tc_name") &&
+					buying_doctypes_for_tc.includes(me.frm.doc.doctype) && !me.frm.doc.tc_name) {
+						me.frm.set_value("tc_name", company_doc.default_buying_terms);
 					}
 				}
-				let selling_doctypes_for_tc = ["Sales Invoice", "Quotation", "Sales Order", "Delivery Note"];
-				if (company_doc.default_selling_terms && dontmanage.meta.has_field(me.frm.doc.doctype, "tc_name") &&
-				selling_doctypes_for_tc.indexOf(me.frm.doc.doctype) != -1) {
-					me.frm.set_value("tc_name", company_doc.default_selling_terms);
-				}
-				let buying_doctypes_for_tc = ["Request for Quotation", "Supplier Quotation", "Purchase Order",
-					"Material Request", "Purchase Receipt"];
-				// Purchase Invoice is excluded as per issue #3345
-				if (company_doc.default_buying_terms && dontmanage.meta.has_field(me.frm.doc.doctype, "tc_name") &&
-				buying_doctypes_for_tc.indexOf(me.frm.doc.doctype) != -1) {
-					me.frm.set_value("tc_name", company_doc.default_buying_terms);
-				}
-
 				dontmanage.run_serially([
 					() => me.frm.script_manager.trigger("currency"),
 					() => me.update_item_tax_map(),
@@ -913,9 +1003,9 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		let me = this;
 		this.set_dynamic_labels();
 		let company_currency = this.get_company_currency();
-		// Added `ignore_price_list` to determine if document is loading after mapping from another doc
+		// Added `load_after_mapping` to determine if document is loading after mapping from another doc
 		if(this.frm.doc.currency && this.frm.doc.currency !== company_currency
-				&& !(this.frm.doc.__onload && this.frm.doc.__onload.ignore_price_list)) {
+				&& !this.frm.doc.__onload?.load_after_mapping) {
 
 			this.get_exchange_rate(transaction_date, this.frm.doc.currency, company_currency,
 				function(exchange_rate) {
@@ -947,7 +1037,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		}
 
 		if(flt(this.frm.doc.conversion_rate)>0.0) {
-			if(this.frm.doc.__onload && this.frm.doc.__onload.ignore_price_list) {
+			if(this.frm.doc.__onload?.load_after_mapping) {
 				this.calculate_taxes_and_totals();
 			} else if (!this.in_apply_price_list){
 				this.apply_price_list();
@@ -956,6 +1046,16 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		}
 		// Make read only if Accounts Settings doesn't allow stale rates
 		this.frm.set_df_property("conversion_rate", "read_only", dontmanageerp.stale_rate_allowed() ? 0 : 1);
+	}
+
+	apply_discount_on_item(doc, cdt, cdn, field) {
+		var item = dontmanage.get_doc(cdt, cdn);
+		if(!item.price_list_rate) {
+			item[field] = 0.0;
+		} else {
+			this.price_list_rate(doc, cdt, cdn);
+		}
+		this.set_gross_profit(item);
 	}
 
 	shipping_rule() {
@@ -1024,9 +1124,9 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		this.set_dynamic_labels();
 
 		var company_currency = this.get_company_currency();
-		// Added `ignore_price_list` to determine if document is loading after mapping from another doc
+		// Added `load_after_mapping` to determine if document is loading after mapping from another doc
 		if(this.frm.doc.price_list_currency !== company_currency  &&
-				!(this.frm.doc.__onload && this.frm.doc.__onload.ignore_price_list)) {
+				!this.frm.doc.__onload?.load_after_mapping) {
 			this.get_exchange_rate(this.frm.doc.posting_date, this.frm.doc.price_list_currency, company_currency,
 				function(exchange_rate) {
 					me.frm.set_value("plc_conversion_rate", exchange_rate);
@@ -1132,11 +1232,22 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		let item = dontmanage.get_doc(cdt, cdn);
 		// item.pricing_rules = ''
 		dontmanage.run_serially([
-			() => this.remove_pricing_rule(item),
+			() => this.remove_pricing_rule_for_item(item),
 			() => this.conversion_factor(doc, cdt, cdn, true),
+			() => this.apply_price_list(item, true), //reapply price list before applying pricing rule
 			() => this.calculate_stock_uom_rate(doc, cdt, cdn),
 			() => this.apply_pricing_rule(item, true)
 		]);
+	}
+
+	stock_qty(doc, cdt, cdn) {
+		let item = dontmanage.get_doc(cdt, cdn);
+		item.conversion_factor = 1.0;
+		if (item.stock_qty) {
+			item.conversion_factor = flt(item.stock_qty) / flt(item.qty);
+		}
+
+		refresh_field("conversion_factor", item.name, item.parentfield);
 	}
 
 	calculate_stock_uom_rate(doc, cdt, cdn) {
@@ -1174,6 +1285,11 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 				}
 			})
 		}
+	}
+
+	process_item_removal() {
+		this.frm.trigger("calculate_taxes_and_totals");
+		this.frm.trigger("calculate_net_weight");
 	}
 
 	calculate_net_weight(){
@@ -1356,8 +1472,8 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 
 	ignore_pricing_rule() {
 		if(this.frm.doc.ignore_pricing_rule) {
-			var me = this;
-			var item_list = [];
+			let me = this;
+			let item_list = [];
 
 			$.each(this.frm.doc["items"] || [], function(i, d) {
 				if (d.item_code) {
@@ -1396,6 +1512,36 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		}
 	}
 
+	remove_pricing_rule_for_item(item) {
+		if (item.pricing_rules){
+			let me = this;
+			return this.frm.call({
+				method: "dontmanageerp.accounts.doctype.pricing_rule.pricing_rule.remove_pricing_rule_for_item",
+				args: {
+					pricing_rules: item.pricing_rules,
+					item_details: {
+						"doctype": item.doctype,
+						"name": item.name,
+						"item_code": item.item_code,
+						"pricing_rules": item.pricing_rules,
+						"parenttype": item.parenttype,
+						"parent": item.parent,
+						"price_list_rate": item.price_list_rate
+					},
+					item_code: item.item_code,
+					rate: item.price_list_rate,
+				},
+				callback: function(r) {
+					if (!r.exc && r.message) {
+						me.remove_pricing_rule(r.message);
+						me.calculate_taxes_and_totals();
+						if(me.frm.doc.apply_discount_on) me.frm.trigger("apply_discount_on");
+					}
+				}
+			});
+		}
+	}
+
 	apply_pricing_rule(item, calculate_taxes_and_totals) {
 		var me = this;
 		var args = this._get_args(item);
@@ -1405,7 +1551,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		}
 
 		// Target doc created from a mapped doc
-		if (this.frm.doc.__onload && this.frm.doc.__onload.ignore_price_list) {
+		if (this.frm.doc.__onload?.load_after_mapping) {
 			// Calculate totals even though pricing rule is not applied.
 			// `apply_pricing_rule` is triggered due to change in data which most likely contributes to Total.
 			if (calculate_taxes_and_totals) me.calculate_taxes_and_totals();
@@ -1608,8 +1754,8 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 			this.frm.set_value("plc_conversion_rate", "");
 		}
 
-		var me = this;
-		var args = this._get_args(item);
+		let me = this;
+		let args = this._get_args(item);
 		if (!((args.items && args.items.length) || args.price_list)) {
 			return;
 		}
@@ -1628,6 +1774,9 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 						() => {
 							if(args.items.length) {
 								me._set_values_for_item_list(r.message.children);
+								$.each(r.message.children || [], function(i, d) {
+									me.apply_discount_on_item(d, d.doctype, d.name, 'discount_percentage');
+								});
 							}
 						},
 						() => { me.in_apply_price_list = false; }
@@ -1648,7 +1797,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 			"discount_amount", "margin_rate_or_amount", "rate_with_margin"];
 
 		if(item.remove_free_item) {
-			var items = [];
+			let items = [];
 
 			me.frm.doc.items.forEach(d => {
 				if(d.item_code != item.remove_free_item || !d.is_free_item) {
@@ -1696,7 +1845,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		}
 
 		$.each(["company", "customer"], function(i, fieldname) {
-			if(dontmanage.meta.has_field(me.frm.doc.doctype, fieldname) && me.frm.doc.doctype != "Purchase Order") {
+			if(dontmanage.meta.has_field(me.frm.doc.doctype, fieldname) &&  !["Purchase Order","Purchase Invoice"].includes(me.frm.doc.doctype)) {
 				if (!me.frm.doc[fieldname]) {
 					dontmanage.msgprint(__("Please specify") + ": " +
 						dontmanage.meta.get_label(me.frm.doc.doctype, fieldname, me.frm.doc.name) +
@@ -1766,7 +1915,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 			if (item.item_code) {
 				// Use combination of name and item code in case same item is added multiple times
 				item_codes.push([item.item_code, item.name]);
-				item_rates[item.name] = item.net_rate;
+				item_rates[item.name] = item.base_net_rate;
 				item_tax_templates[item.name] = item.item_tax_template;
 			}
 		});
@@ -1897,18 +2046,58 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 	}
 
 	make_payment_entry() {
+		let via_journal_entry = this.frm.doc.__onload && this.frm.doc.__onload.make_payment_via_journal_entry;
+		if(this.has_discount_in_schedule() && !via_journal_entry) {
+			// If early payment discount is applied, ask user for reference date
+			this.prompt_user_for_reference_date();
+		} else {
+			this.make_mapped_payment_entry();
+		}
+	}
+
+	make_mapped_payment_entry(args) {
+		var me = this;
+		args = args || { "dt": this.frm.doc.doctype, "dn": this.frm.doc.name };
 		return dontmanage.call({
-			method: cur_frm.cscript.get_method_for_payment(),
-			args: {
-				"dt": cur_frm.doc.doctype,
-				"dn": cur_frm.doc.name
-			},
+			method: me.get_method_for_payment(),
+			args: args,
 			callback: function(r) {
 				var doclist = dontmanage.model.sync(r.message);
 				dontmanage.set_route("Form", doclist[0].doctype, doclist[0].name);
-				// cur_frm.refresh_fields()
 			}
 		});
+	}
+
+	prompt_user_for_reference_date(){
+		let me = this;
+		dontmanage.prompt({
+			label: __("Cheque/Reference Date"),
+			fieldname: "reference_date",
+			fieldtype: "Date",
+			reqd: 1,
+		}, (values) => {
+			let args = {
+				"dt": me.frm.doc.doctype,
+				"dn": me.frm.doc.name,
+				"reference_date": values.reference_date
+			}
+			me.make_mapped_payment_entry(args);
+		},
+		__("Reference Date for Early Payment Discount"),
+		__("Continue")
+		);
+	}
+
+	has_discount_in_schedule() {
+		let is_eligible = in_list(
+			["Sales Order", "Sales Invoice", "Purchase Order", "Purchase Invoice"],
+			this.frm.doctype
+		);
+		let has_payment_schedule = this.frm.doc.payment_schedule && this.frm.doc.payment_schedule.length;
+		if(!is_eligible || !has_payment_schedule) return false;
+
+		let has_discount = this.frm.doc.payment_schedule.some(row => row.discount);
+		return has_discount;
 	}
 
 	make_quality_inspection() {
@@ -1981,6 +2170,7 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 		const me = this;
 		const dialog = new dontmanage.ui.Dialog({
 			title: __("Select Items for Quality Inspection"),
+			size: "extra-large",
 			fields: fields,
 			primary_action: function () {
 				const data = dialog.get_values();
@@ -2232,12 +2422,14 @@ dontmanageerp.TransactionController = class TransactionController extends dontma
 	}
 };
 
-dontmanageerp.show_serial_batch_selector = function (frm, d, callback, on_close, show_dialog) {
+dontmanageerp.show_serial_batch_selector = function (frm, item_row, callback, on_close, show_dialog) {
 	let warehouse, receiving_stock, existing_stock;
+
+	let warehouse_field = "warehouse";
 	if (frm.doc.is_return) {
 		if (["Purchase Receipt", "Purchase Invoice"].includes(frm.doc.doctype)) {
 			existing_stock = true;
-			warehouse = d.warehouse;
+			warehouse = item_row.warehouse;
 		} else if (["Delivery Note", "Sales Invoice"].includes(frm.doc.doctype)) {
 			receiving_stock = true;
 		}
@@ -2247,11 +2439,24 @@ dontmanageerp.show_serial_batch_selector = function (frm, d, callback, on_close,
 				receiving_stock = true;
 			} else {
 				existing_stock = true;
-				warehouse = d.s_warehouse;
+				warehouse = item_row.s_warehouse;
+			}
+
+			if (in_list([
+					"Material Transfer",
+					"Send to Subcontractor",
+					"Material Issue",
+					"Material Consumption for Manufacture",
+					"Material Transfer for Manufacture"
+				], frm.doc.purpose)
+			) {
+				warehouse_field = "s_warehouse";
+			} else {
+				warehouse_field = "t_warehouse";
 			}
 		} else {
 			existing_stock = true;
-			warehouse = d.warehouse;
+			warehouse = item_row.warehouse;
 		}
 	}
 
@@ -2264,16 +2469,26 @@ dontmanageerp.show_serial_batch_selector = function (frm, d, callback, on_close,
 	}
 
 	dontmanage.require("assets/dontmanageerp/js/utils/serial_no_batch_selector.js", function() {
-		new dontmanageerp.SerialNoBatchSelector({
-			frm: frm,
-			item: d,
-			warehouse_details: {
-				type: "Warehouse",
-				name: warehouse
-			},
-			callback: callback,
-			on_close: on_close
-		}, show_dialog);
+		if (in_list(["Sales Invoice", "Delivery Note"], frm.doc.doctype)) {
+			item_row.type_of_transaction = frm.doc.is_return ? "Inward" : "Outward";
+		} else {
+			item_row.type_of_transaction = frm.doc.is_return ? "Outward" : "Inward";
+		}
+
+		new dontmanageerp.SerialBatchPackageSelector(frm, item_row, (r) => {
+			if (r) {
+				let update_values = {
+					"serial_and_batch_bundle": r.name,
+					"qty": Math.abs(r.total_qty)
+				}
+
+				if (r.warehouse) {
+					update_values[warehouse_field] = r.warehouse;
+				}
+
+				dontmanage.model.set_value(item_row.doctype, item_row.name, update_values);
+			}
+		});
 	});
 }
 

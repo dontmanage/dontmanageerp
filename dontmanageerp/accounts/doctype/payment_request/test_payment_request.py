@@ -6,6 +6,7 @@ import unittest
 import dontmanage
 
 from dontmanageerp.accounts.doctype.payment_request.payment_request import make_payment_request
+from dontmanageerp.accounts.doctype.purchase_invoice.test_purchase_invoice import make_purchase_invoice
 from dontmanageerp.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
 from dontmanageerp.selling.doctype.sales_order.test_sales_order import make_sales_order
 from dontmanageerp.setup.utils import get_exchange_rate
@@ -74,6 +75,29 @@ class TestPaymentRequest(unittest.TestCase):
 		self.assertEqual(pr.reference_name, si_usd.name)
 		self.assertEqual(pr.currency, "USD")
 
+	def test_payment_entry_against_purchase_invoice(self):
+		si_usd = make_purchase_invoice(
+			customer="_Test Supplier USD",
+			debit_to="_Test Payable USD - _TC",
+			currency="USD",
+			conversion_rate=50,
+		)
+
+		pr = make_payment_request(
+			dt="Purchase Invoice",
+			dn=si_usd.name,
+			recipient_id="user@example.com",
+			mute_email=1,
+			payment_gateway_account="_Test Gateway - USD",
+			submit_doc=1,
+			return_doc=1,
+		)
+
+		pe = pr.create_payment_entry()
+		pr.load_from_db()
+
+		self.assertEqual(pr.status, "Paid")
+
 	def test_payment_entry(self):
 		dontmanage.db.set_value(
 			"Company", "_Test Company", "exchange_gain_loss_account", "_Test Exchange Gain/Loss - _TC"
@@ -120,8 +144,7 @@ class TestPaymentRequest(unittest.TestCase):
 			(d[0], d)
 			for d in [
 				["_Test Receivable USD - _TC", 0, 5000, si_usd.name],
-				[pr.payment_account, 6290.0, 0, None],
-				["_Test Exchange Gain/Loss - _TC", 0, 1290, None],
+				[pr.payment_account, 5000.0, 0, None],
 			]
 		)
 

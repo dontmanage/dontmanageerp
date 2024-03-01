@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: patch-develop-${{ github.event.number }}
+  group: patch-develop-${{ github.event_name }}-${{ github.event.number || github.event_name == 'workflow_dispatch' && github.run_id || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -23,12 +23,12 @@ jobs:
 
     services:
       mysql:
-        image: mariadb:10.3
+        image: mariadb:10.6
         env:
-          MYSQL_ALLOW_EMPTY_PASSWORD: YES
+          MARIADB_ROOT_PASSWORD: 'root'
         ports:
           - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+        options: --health-cmd="mariadb-admin ping" --health-interval=5s --health-timeout=2s --health-retries=3
 
     steps:
       - name: Clone
@@ -43,14 +43,14 @@ jobs:
           fi
 
       - name: Setup Python
-        uses: "gabrielfalcao/pyenv-action@v9"
+        uses: "actions/setup-python@v4"
         with:
-          versions: 3.10:latest, 3.7:latest
+          python-version: '3.10'
 
       - name: Setup Node
         uses: actions/setup-node@v2
         with:
-          node-version: 14
+          node-version: 18
           check-latest: true
 
       - name: Add to Hosts
@@ -92,7 +92,6 @@ jobs:
       - name: Install
         run: |
           pip install dontmanage-bench
-          pyenv global $(pyenv versions | grep '3.10')
           bash ${GITHUB_WORKSPACE}/.github/helper/install.sh
         env:
           DB: mariadb
@@ -101,42 +100,60 @@ jobs:
       - name: Run Patch Tests
         run: |
           cd ~/dontmanage-bench/
-          wget https://dontmanageerp.com/files/v10-dontmanageerp.sql.gz
-          bench --site test_site --force restore ~/dontmanage-bench/v10-dontmanageerp.sql.gz
+          bench remove-app payments --force
+          jq 'del(.install_apps)' ~/dontmanage-bench/sites/test_site/site_config.json > tmp.json
+          mv tmp.json ~/dontmanage-bench/sites/test_site/site_config.json
+
+          wget https://dontmanageerp.com/files/v13-dontmanageerp.sql.gz
+          bench --site test_site --force restore ~/dontmanage-bench/v13-dontmanageerp.sql.gz
 
           git -C "apps/dontmanage" remote set-url upstream https://github.com/dontmanage/dontmanage.git
           git -C "apps/dontmanageerp" remote set-url upstream https://github.com/dontmanage/dontmanageerp.git
 
-          pyenv global $(pyenv versions | grep '3.7')
-          for version in $(seq 12 13)
-          do
-              echo "Updating to v$version"
-              branch_name="version-$version-hotfix"
 
-              git -C "apps/dontmanage" fetch --depth 1 upstream $branch_name:$branch_name
-              git -C "apps/dontmanageerp" fetch --depth 1 upstream $branch_name:$branch_name
+          function update_to_version() {
+            version=$1
 
-              git -C "apps/dontmanage" checkout -q -f $branch_name
-              git -C "apps/dontmanageerp" checkout -q -f $branch_name
+            branch_name="version-$version-hotfix"
+            echo "Updating to v$version"
 
-              rm -rf ~/dontmanage-bench/env
-              bench setup env
-              bench pip install -e ./apps/payments
-              bench pip install -e ./apps/dontmanageerp
+            # Fetch and checkout branches
+            git -C "apps/dontmanage" fetch --depth 1 upstream $branch_name:$branch_name
+            git -C "apps/dontmanageerp" fetch --depth 1 upstream $branch_name:$branch_name
+            git -C "apps/dontmanage" checkout -q -f $branch_name
+            git -C "apps/dontmanageerp" checkout -q -f $branch_name
 
-              bench --site test_site migrate
-          done
+            # Resetup env and install apps
+            pgrep honcho | xargs kill
+            rm -rf ~/dontmanage-bench/env
+            bench -v setup env
+            bench pip install -e ./apps/dontmanageerp
+            bench start &>> ~/dontmanage-bench/bench_start.log &
 
+            bench --site test_site migrate
+          }
+
+          update_to_version 14
 
           echo "Updating to latest version"
           git -C "apps/dontmanage" checkout -q -f "${GITHUB_BASE_REF:-${GITHUB_REF##*/}}"
           git -C "apps/dontmanageerp" checkout -q -f "$GITHUB_SHA"
 
-          pyenv global $(pyenv versions | grep '3.10')
+          pgrep honcho | xargs kill
           rm -rf ~/dontmanage-bench/env
           bench -v setup env
-          bench pip install -e ./apps/payments
           bench pip install -e ./apps/dontmanageerp
+          bench start &>> ~/dontmanage-bench/bench_start.log &
 
           bench --site test_site migrate
-          bench --site test_site install-app payments
+
+      - name: Show bench output
+        if: ${{ always() }}
+        run: |
+          cd ~/dontmanage-bench
+          cat bench_start.log || true
+          cd logs
+          for f in ./*.log*; do
+            echo "Printing log: $f";
+            cat $f
+          done

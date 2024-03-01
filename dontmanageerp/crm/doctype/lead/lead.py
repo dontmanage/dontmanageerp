@@ -3,7 +3,10 @@
 
 import dontmanage
 from dontmanage import _
-from dontmanage.contacts.address_and_contact import load_address_and_contact
+from dontmanage.contacts.address_and_contact import (
+	delete_contact_and_address,
+	load_address_and_contact,
+)
 from dontmanage.email.inbox import link_communication_to_document
 from dontmanage.model.mapper import get_mapped_doc
 from dontmanage.utils import comma_and, get_link_to_form, has_gravatar, validate_email_address
@@ -11,11 +14,75 @@ from dontmanage.utils import comma_and, get_link_to_form, has_gravatar, validate
 from dontmanageerp.accounts.party import set_taxes
 from dontmanageerp.controllers.selling_controller import SellingController
 from dontmanageerp.crm.utils import CRMNote, copy_comments, link_communications, link_open_events
+from dontmanageerp.selling.doctype.customer.customer import parse_full_name
 
 
 class Lead(SellingController, CRMNote):
-	def get_feed(self):
-		return "{0}: {1}".format(_(self.status), self.lead_name)
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.crm.doctype.crm_note.crm_note import CRMNote
+
+		annual_revenue: DF.Currency
+		blog_subscriber: DF.Check
+		campaign_name: DF.Link | None
+		city: DF.Data | None
+		company: DF.Link | None
+		company_name: DF.Data | None
+		country: DF.Link | None
+		customer: DF.Link | None
+		disabled: DF.Check
+		email_id: DF.Data | None
+		fax: DF.Data | None
+		first_name: DF.Data | None
+		gender: DF.Link | None
+		image: DF.AttachImage | None
+		industry: DF.Link | None
+		job_title: DF.Data | None
+		language: DF.Link | None
+		last_name: DF.Data | None
+		lead_name: DF.Data | None
+		lead_owner: DF.Link | None
+		market_segment: DF.Link | None
+		middle_name: DF.Data | None
+		mobile_no: DF.Data | None
+		naming_series: DF.Literal["CRM-LEAD-.YYYY.-"]
+		no_of_employees: DF.Literal["1-10", "11-50", "51-200", "201-500", "501-1000", "1000+"]
+		notes: DF.Table[CRMNote]
+		phone: DF.Data | None
+		phone_ext: DF.Data | None
+		qualification_status: DF.Literal["Unqualified", "In Process", "Qualified"]
+		qualified_by: DF.Link | None
+		qualified_on: DF.Date | None
+		request_type: DF.Literal[
+			"", "Product Enquiry", "Request for Information", "Suggestions", "Other"
+		]
+		salutation: DF.Link | None
+		source: DF.Link | None
+		state: DF.Data | None
+		status: DF.Literal[
+			"Lead",
+			"Open",
+			"Replied",
+			"Opportunity",
+			"Quotation",
+			"Lost Quotation",
+			"Interested",
+			"Converted",
+			"Do Not Contact",
+		]
+		territory: DF.Link | None
+		title: DF.Data | None
+		type: DF.Literal["", "Client", "Channel Partner", "Consultant"]
+		unsubscribed: DF.Check
+		website: DF.Data | None
+		whatsapp_no: DF.Data | None
+	# end: auto-generated types
 
 	def onload(self):
 		customer = dontmanage.db.get_value("Customer", {"lead_name": self.name})
@@ -34,7 +101,20 @@ class Lead(SellingController, CRMNote):
 	def before_insert(self):
 		self.contact_doc = None
 		if dontmanage.db.get_single_value("CRM Settings", "auto_creation_of_contact"):
+			if self.source == "Existing Customer" and self.customer:
+				contact = dontmanage.db.get_value(
+					"Dynamic Link",
+					{"link_doctype": "Customer", "parenttype": "Contact", "link_name": self.customer},
+					"parent",
+				)
+				if contact:
+					self.contact_doc = dontmanage.get_doc("Contact", contact)
+					return
 			self.contact_doc = self.create_contact()
+
+		# leads created by email inbox only have the full name set
+		if self.lead_name and not any([self.first_name, self.middle_name, self.last_name]):
+			self.first_name, self.middle_name, self.last_name = parse_full_name(self.lead_name)
 
 	def after_insert(self):
 		self.link_to_contact()
@@ -43,9 +123,8 @@ class Lead(SellingController, CRMNote):
 		self.update_prospect()
 
 	def on_trash(self):
-		dontmanage.db.sql("""update `tabIssue` set lead='' where lead=%s""", self.name)
-
-		self.unlink_dynamic_links()
+		dontmanage.db.set_value("Issue", {"lead": self.name}, "lead", None)
+		delete_contact_and_address(self.doctype, self.name)
 		self.remove_link_from_prospect()
 
 	def set_full_name(self):
@@ -122,27 +201,6 @@ class Lead(SellingController, CRMNote):
 			)
 			lead_row.db_update()
 
-	def unlink_dynamic_links(self):
-		links = dontmanage.get_all(
-			"Dynamic Link",
-			filters={"link_doctype": self.doctype, "link_name": self.name},
-			fields=["parent", "parenttype"],
-		)
-
-		for link in links:
-			linked_doc = dontmanage.get_doc(link["parenttype"], link["parent"])
-
-			if len(linked_doc.get("links")) == 1:
-				linked_doc.delete(ignore_permissions=True)
-			else:
-				to_remove = None
-				for d in linked_doc.get("links"):
-					if d.link_doctype == self.doctype and d.link_name == self.name:
-						to_remove = d
-				if to_remove:
-					linked_doc.remove(to_remove)
-					linked_doc.save(ignore_permissions=True)
-
 	def remove_link_from_prospect(self):
 		prospects = self.get_linked_prospects()
 
@@ -204,7 +262,7 @@ class Lead(SellingController, CRMNote):
 				"last_name": self.last_name,
 				"salutation": self.salutation,
 				"gender": self.gender,
-				"job_title": self.job_title,
+				"designation": self.job_title,
 				"company_name": self.company_name,
 			}
 		)
@@ -401,7 +459,7 @@ def get_lead_details(lead, posting_date=None, company=None):
 		}
 	)
 
-	set_address_details(out, lead, "Lead")
+	set_address_details(out, lead, "Lead", company=company)
 
 	taxes_and_charges = set_taxes(
 		None,
@@ -454,6 +512,7 @@ def get_lead_with_phone_number(number):
 		"Lead",
 		or_filters={
 			"phone": ["like", "%{}".format(number)],
+			"whatsapp_no": ["like", "%{}".format(number)],
 			"mobile_no": ["like", "%{}".format(number)],
 		},
 		limit=1,

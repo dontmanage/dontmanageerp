@@ -195,6 +195,22 @@ class TestCompany(unittest.TestCase):
 		child_company.save()
 		self.test_basic_tree()
 
+	def test_demo_data(self):
+		from dontmanageerp.setup.demo import clear_demo_data, setup_demo_data
+
+		setup_demo_data()
+		company_name = dontmanage.db.get_value("Company", {"name": ("like", "%(Demo)")})
+		self.assertTrue(company_name)
+
+		for transaction in dontmanage.get_hooks("demo_transaction_doctypes"):
+			self.assertTrue(dontmanage.db.exists(dontmanage.unscrub(transaction), {"company": company_name}))
+
+		clear_demo_data()
+		company_name = dontmanage.db.get_value("Company", {"name": ("like", "%(Demo)")})
+		self.assertFalse(company_name)
+		for transaction in dontmanage.get_hooks("demo_transaction_doctypes"):
+			self.assertFalse(dontmanage.db.exists(dontmanage.unscrub(transaction), {"company": company_name}))
+
 
 def create_company_communication(doctype, docname):
 	comm = dontmanage.get_doc(

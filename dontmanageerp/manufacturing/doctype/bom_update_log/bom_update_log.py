@@ -24,6 +24,27 @@ class BOMMissingError(dontmanage.ValidationError):
 
 
 class BOMUpdateLog(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.manufacturing.doctype.bom_update_batch.bom_update_batch import BOMUpdateBatch
+
+		amended_from: DF.Link | None
+		bom_batches: DF.Table[BOMUpdateBatch]
+		current_bom: DF.Link | None
+		current_level: DF.Int
+		error_log: DF.Link | None
+		new_bom: DF.Link | None
+		processed_boms: DF.LongText | None
+		status: DF.Literal["Queued", "In Progress", "Completed", "Failed"]
+		update_type: DF.Literal["Replace BOM", "Update Cost"]
+	# end: auto-generated types
+
 	@staticmethod
 	def clear_old_logs(days=None):
 		days = days or 90
@@ -88,12 +109,15 @@ class BOMUpdateLog(Document):
 				boms=boms,
 				timeout=40000,
 				now=dontmanage.flags.in_test,
+				enqueue_after_commit=True,
 			)
 		else:
 			dontmanage.enqueue(
 				method="dontmanageerp.manufacturing.doctype.bom_update_log.bom_update_log.process_boms_cost_level_wise",
+				queue="long",
 				update_doc=self,
 				now=dontmanage.flags.in_test,
+				enqueue_after_commit=True,
 			)
 
 
@@ -164,7 +188,7 @@ def queue_bom_cost_jobs(
 
 	while current_boms_list:
 		batch_no += 1
-		batch_size = 20_000
+		batch_size = 7_000
 		boms_to_process = current_boms_list[:batch_size]  # slice out batch of 20k BOMs
 
 		# update list to exclude 20K (queued) BOMs
@@ -212,7 +236,7 @@ def resume_bom_cost_update_jobs():
 			["name", "boms_updated", "status"],
 		)
 		incomplete_level = any(row.get("status") == "Pending" for row in bom_batches)
-		if not bom_batches or not incomplete_level:
+		if not bom_batches or incomplete_level:
 			continue
 
 		# Prep parent BOMs & updated processed BOMs for next level
@@ -252,9 +276,6 @@ def get_processed_current_boms(
 	current_boms = []
 
 	for row in bom_batches:
-		if not row.boms_updated:
-			continue
-
 		boms_updated = json.loads(row.boms_updated)
 		current_boms.extend(boms_updated)
 		boms_updated_dict = {bom: True for bom in boms_updated}

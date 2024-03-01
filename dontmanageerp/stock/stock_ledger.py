@@ -2,20 +2,42 @@
 # License: GNU General Public License v3. See license.txt
 
 import copy
+import gzip
 import json
 from typing import Optional, Set, Tuple
 
 import dontmanage
-from dontmanage import _
+from dontmanage import _, scrub
 from dontmanage.model.meta import get_field_precision
-from dontmanage.query_builder.functions import CombineDatetime, Sum
-from dontmanage.utils import cint, cstr, flt, get_link_to_form, getdate, now, nowdate
+from dontmanage.query_builder.functions import Sum
+from dontmanage.utils import (
+	cint,
+	cstr,
+	flt,
+	get_link_to_form,
+	getdate,
+	now,
+	nowdate,
+	nowtime,
+	parse_json,
+)
 
 import dontmanageerp
 from dontmanageerp.stock.doctype.bin.bin import update_qty as update_bin_qty
+from dontmanageerp.stock.doctype.inventory_dimension.inventory_dimension import get_inventory_dimensions
+from dontmanageerp.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+	get_available_batches,
+)
+from dontmanageerp.stock.doctype.stock_reservation_entry.stock_reservation_entry import (
+	get_sre_reserved_batch_nos_details,
+	get_sre_reserved_serial_nos_details,
+)
 from dontmanageerp.stock.utils import (
+	get_combine_datetime,
 	get_incoming_outgoing_rate_for_cancel,
+	get_incoming_rate,
 	get_or_make_bin,
+	get_stock_balance,
 	get_valuation_method,
 )
 from dontmanageerp.stock.valuation import FIFOValuation, LIFOValuation, round_off_if_near_zero
@@ -74,6 +96,7 @@ def make_sl_entries(sl_entries, allow_negative_stock=False, via_landed_cost_vouc
 				sle_doc = make_entry(sle, allow_negative_stock, via_landed_cost_voucher)
 
 			args = sle_doc.as_dict()
+			args["posting_datetime"] = get_combine_datetime(args.posting_date, args.posting_time)
 
 			if sle.get("voucher_type") == "Stock Reconciliation":
 				# preserve previous_qty_after_transaction for qty reposting
@@ -82,6 +105,7 @@ def make_sl_entries(sl_entries, allow_negative_stock=False, via_landed_cost_vouc
 			is_stock_item = dontmanage.get_cached_value("Item", args.get("item_code"), "is_stock_item")
 			if is_stock_item:
 				bin_name = get_or_make_bin(args.get("item_code"), args.get("warehouse"))
+				args.reserved_stock = flt(dontmanage.db.get_value("Bin", bin_name, "reserved_stock"))
 				repost_current_voucher(args, allow_negative_stock, via_landed_cost_voucher)
 				update_bin_qty(bin_name, args)
 			else:
@@ -108,6 +132,7 @@ def repost_current_voucher(args, allow_negative_stock=False, via_landed_cost_vou
 					"voucher_no": args.get("voucher_no"),
 					"sle_id": args.get("name"),
 					"creation": args.get("creation"),
+					"reserved_stock": args.get("reserved_stock"),
 				},
 				allow_negative_stock=allow_negative_stock,
 				via_landed_cost_voucher=via_landed_cost_voucher,
@@ -197,6 +222,11 @@ def make_entry(args, allow_negative_stock=False, via_landed_cost_voucher=False):
 	sle.allow_negative_stock = allow_negative_stock
 	sle.via_landed_cost_voucher = via_landed_cost_voucher
 	sle.submit()
+
+	# Added to handle the case when the stock ledger entry is created from the repostig
+	if args.get("creation_time") and args.get("voucher_type") == "Stock Reconciliation":
+		sle.db_set("creation", args.get("creation_time"))
+
 	return sle
 
 
@@ -211,14 +241,18 @@ def repost_future_sle(
 	if not args:
 		args = []  # set args to empty list if None to avoid enumerate error
 
+	reposting_data = {}
+	if doc and doc.reposting_data_file:
+		reposting_data = get_reposting_data(doc.reposting_data_file)
+
 	items_to_be_repost = get_items_to_be_repost(
-		voucher_type=voucher_type, voucher_no=voucher_no, doc=doc
+		voucher_type=voucher_type, voucher_no=voucher_no, doc=doc, reposting_data=reposting_data
 	)
 	if items_to_be_repost:
 		args = items_to_be_repost
 
-	distinct_item_warehouses = get_distinct_item_warehouse(args, doc)
-	affected_transactions = get_affected_transactions(doc)
+	distinct_item_warehouses = get_distinct_item_warehouse(args, doc, reposting_data=reposting_data)
+	affected_transactions = get_affected_transactions(doc, reposting_data=reposting_data)
 
 	i = get_current_index(doc) or 0
 	while i < len(args):
@@ -261,6 +295,28 @@ def repost_future_sle(
 			)
 
 
+def get_reposting_data(file_path) -> dict:
+	file_name = dontmanage.db.get_value(
+		"File",
+		{
+			"file_url": file_path,
+			"attached_to_field": "reposting_data_file",
+		},
+		"name",
+	)
+
+	if not file_name:
+		return dontmanage._dict()
+
+	attached_file = dontmanage.get_doc("File", file_name)
+
+	data = gzip.decompress(attached_file.get_content())
+	if data := json.loads(data.decode("utf-8")):
+		data = data
+
+	return parse_json(data)
+
+
 def validate_item_warehouse(args):
 	for field in ["item_code", "warehouse", "posting_date", "posting_time"]:
 		if args.get(field) in [None, ""]:
@@ -271,28 +327,109 @@ def validate_item_warehouse(args):
 def update_args_in_repost_item_valuation(
 	doc, index, args, distinct_item_warehouses, affected_transactions
 ):
-	doc.db_set(
-		{
-			"items_to_be_repost": json.dumps(args, default=str),
-			"distinct_item_and_warehouse": json.dumps(
-				{str(k): v for k, v in distinct_item_warehouses.items()}, default=str
-			),
-			"current_index": index,
-			"affected_transactions": dontmanage.as_json(affected_transactions),
-		}
-	)
+	if not doc.items_to_be_repost:
+		file_name = ""
+		if doc.reposting_data_file:
+			file_name = get_reposting_file_name(doc.doctype, doc.name)
+			# dontmanage.delete_doc("File", file_name, ignore_permissions=True, delete_permanently=True)
+
+		doc.reposting_data_file = create_json_gz_file(
+			{
+				"items_to_be_repost": args,
+				"distinct_item_and_warehouse": {str(k): v for k, v in distinct_item_warehouses.items()},
+				"affected_transactions": affected_transactions,
+			},
+			doc,
+			file_name,
+		)
+
+		doc.db_set(
+			{
+				"current_index": index,
+				"total_reposting_count": len(args),
+				"reposting_data_file": doc.reposting_data_file,
+			}
+		)
+
+	else:
+		doc.db_set(
+			{
+				"items_to_be_repost": json.dumps(args, default=str),
+				"distinct_item_and_warehouse": json.dumps(
+					{str(k): v for k, v in distinct_item_warehouses.items()}, default=str
+				),
+				"current_index": index,
+				"affected_transactions": dontmanage.as_json(affected_transactions),
+			}
+		)
 
 	if not dontmanage.flags.in_test:
 		dontmanage.db.commit()
 
 	dontmanage.publish_realtime(
 		"item_reposting_progress",
-		{"name": doc.name, "items_to_be_repost": json.dumps(args, default=str), "current_index": index},
+		{
+			"name": doc.name,
+			"items_to_be_repost": json.dumps(args, default=str),
+			"current_index": index,
+			"total_reposting_count": len(args),
+		},
+		doctype=doc.doctype,
+		docname=doc.name,
 	)
 
 
-def get_items_to_be_repost(voucher_type=None, voucher_no=None, doc=None):
+def get_reposting_file_name(dt, dn):
+	return dontmanage.db.get_value(
+		"File",
+		{
+			"attached_to_doctype": dt,
+			"attached_to_name": dn,
+			"attached_to_field": "reposting_data_file",
+		},
+		"name",
+	)
+
+
+def create_json_gz_file(data, doc, file_name=None) -> str:
+	encoded_content = dontmanage.safe_encode(dontmanage.as_json(data))
+	compressed_content = gzip.compress(encoded_content)
+
+	if not file_name:
+		json_filename = f"{scrub(doc.doctype)}-{scrub(doc.name)}.json.gz"
+		_file = dontmanage.get_doc(
+			{
+				"doctype": "File",
+				"file_name": json_filename,
+				"attached_to_doctype": doc.doctype,
+				"attached_to_name": doc.name,
+				"attached_to_field": "reposting_data_file",
+				"content": compressed_content,
+				"is_private": 1,
+			}
+		)
+		_file.save(ignore_permissions=True)
+
+		return _file.file_url
+	else:
+		file_doc = dontmanage.get_doc("File", file_name)
+		path = file_doc.get_full_path()
+
+		with open(path, "wb") as f:
+			f.write(compressed_content)
+
+		return doc.reposting_data_file
+
+
+def get_items_to_be_repost(voucher_type=None, voucher_no=None, doc=None, reposting_data=None):
+	if not reposting_data and doc and doc.reposting_data_file:
+		reposting_data = get_reposting_data(doc.reposting_data_file)
+
+	if reposting_data and reposting_data.items_to_be_repost:
+		return reposting_data.items_to_be_repost
+
 	items_to_be_repost = []
+
 	if doc and doc.items_to_be_repost:
 		items_to_be_repost = json.loads(doc.items_to_be_repost) or []
 
@@ -308,8 +445,15 @@ def get_items_to_be_repost(voucher_type=None, voucher_no=None, doc=None):
 	return items_to_be_repost or []
 
 
-def get_distinct_item_warehouse(args=None, doc=None):
+def get_distinct_item_warehouse(args=None, doc=None, reposting_data=None):
+	if not reposting_data and doc and doc.reposting_data_file:
+		reposting_data = get_reposting_data(doc.reposting_data_file)
+
+	if reposting_data and reposting_data.distinct_item_and_warehouse:
+		return parse_distinct_items_and_warehouses(reposting_data.distinct_item_and_warehouse)
+
 	distinct_item_warehouses = {}
+
 	if doc and doc.distinct_item_and_warehouse:
 		distinct_item_warehouses = json.loads(doc.distinct_item_and_warehouse)
 		distinct_item_warehouses = {
@@ -324,7 +468,23 @@ def get_distinct_item_warehouse(args=None, doc=None):
 	return distinct_item_warehouses
 
 
-def get_affected_transactions(doc) -> Set[Tuple[str, str]]:
+def parse_distinct_items_and_warehouses(distinct_items_and_warehouses):
+	new_dict = dontmanage._dict({})
+
+	# convert string keys to tuple
+	for k, v in distinct_items_and_warehouses.items():
+		new_dict[dontmanage.safe_eval(k)] = dontmanage._dict(v)
+
+	return new_dict
+
+
+def get_affected_transactions(doc, reposting_data=None) -> Set[Tuple[str, str]]:
+	if not reposting_data and doc and doc.reposting_data_file:
+		reposting_data = get_reposting_data(doc.reposting_data_file)
+
+	if reposting_data and reposting_data.affected_transactions:
+		return {tuple(transaction) for transaction in reposting_data.affected_transactions}
+
 	if not doc.affected_transactions:
 		return set()
 
@@ -380,6 +540,7 @@ class update_entries_after(object):
 		self.new_items_found = False
 		self.distinct_item_warehouses = args.get("distinct_item_warehouses", dontmanage._dict())
 		self.affected_transactions: Set[Tuple[str, str]] = set()
+		self.reserved_stock = flt(self.args.reserved_stock)
 
 		self.data = dontmanage._dict()
 		self.initialize_previous_data(self.args)
@@ -443,11 +604,10 @@ class update_entries_after(object):
 				i += 1
 
 				self.process_sle(sle)
+				self.update_bin_data(sle)
 
 				if sle.dependant_sle_voucher_detail_no:
 					entries_to_fix = self.get_dependent_entries_to_fix(entries_to_fix, sle)
-
-			self.update_bin()
 
 		if self.exceptions:
 			self.raise_exceptions()
@@ -458,12 +618,14 @@ class update_entries_after(object):
 			self.process_sle(sle)
 
 	def get_sle_against_current_voucher(self):
-		self.args["time_format"] = "%H:%i:%s"
+		self.args["posting_datetime"] = get_combine_datetime(
+			self.args.posting_date, self.args.posting_time
+		)
 
 		return dontmanage.db.sql(
 			"""
 			select
-				*, timestamp(posting_date, posting_time) as "timestamp"
+				*, posting_datetime as "timestamp"
 			from
 				`tabStock Ledger Entry`
 			where
@@ -471,8 +633,7 @@ class update_entries_after(object):
 				and warehouse = %(warehouse)s
 				and is_cancelled = 0
 				and (
-					posting_date = %(posting_date)s and
-					time_format(posting_time, %(time_format)s) = time_format(%(posting_time)s, %(time_format)s)
+					posting_datetime = %(posting_datetime)s
 				)
 			order by
 				creation ASC
@@ -514,6 +675,7 @@ class update_entries_after(object):
 	def update_distinct_item_warehouses(self, dependant_sle):
 		key = (dependant_sle.item_code, dependant_sle.warehouse)
 		val = dontmanage._dict({"sle": dependant_sle})
+
 		if key not in self.distinct_item_warehouses:
 			self.distinct_item_warehouses[key] = val
 			self.new_items_found = True
@@ -521,14 +683,30 @@ class update_entries_after(object):
 			existing_sle_posting_date = (
 				self.distinct_item_warehouses[key].get("sle", {}).get("posting_date")
 			)
+
+			dependent_voucher_detail_nos = self.get_dependent_voucher_detail_nos(key)
+
 			if getdate(dependant_sle.posting_date) < getdate(existing_sle_posting_date):
 				val.sle_changed = True
+				dependent_voucher_detail_nos.append(dependant_sle.voucher_detail_no)
+				val.dependent_voucher_detail_nos = dependent_voucher_detail_nos
 				self.distinct_item_warehouses[key] = val
 				self.new_items_found = True
+			elif dependant_sle.voucher_detail_no not in set(dependent_voucher_detail_nos):
+				# Future dependent voucher needs to be repost to get the correct stock value
+				# If dependent voucher has not reposted, then add it to the list
+				dependent_voucher_detail_nos.append(dependant_sle.voucher_detail_no)
+				self.new_items_found = True
+				val.dependent_voucher_detail_nos = dependent_voucher_detail_nos
+				self.distinct_item_warehouses[key] = val
+
+	def get_dependent_voucher_detail_nos(self, key):
+		if "dependent_voucher_detail_nos" not in self.distinct_item_warehouses[key]:
+			self.distinct_item_warehouses[key].dependent_voucher_detail_nos = []
+
+		return self.distinct_item_warehouses[key].dependent_voucher_detail_nos
 
 	def process_sle(self, sle):
-		from dontmanageerp.stock.doctype.serial_no.serial_no import get_serial_nos
-
 		# previous sle data for this warehouse
 		self.wh_data = self.data[sle.warehouse]
 		self.affected_transactions.add((sle.voucher_type, sle.voucher_no))
@@ -545,28 +723,50 @@ class update_entries_after(object):
 			self.get_dynamic_incoming_outgoing_rate(sle)
 
 		if (
+			sle.voucher_type == "Stock Reconciliation"
+			and (sle.batch_no or sle.serial_no or sle.serial_and_batch_bundle)
+			and sle.voucher_detail_no
+			and not self.args.get("sle_id")
+			and sle.is_cancelled == 0
+		):
+			self.reset_actual_qty_for_stock_reco(sle)
+
+		if (
 			sle.voucher_type in ["Purchase Receipt", "Purchase Invoice"]
 			and sle.voucher_detail_no
 			and sle.actual_qty < 0
-			and dontmanage.get_cached_value(sle.voucher_type, sle.voucher_no, "is_internal_supplier")
+			and is_internal_transfer(sle)
 		):
 			sle.outgoing_rate = get_incoming_rate_for_inter_company_transfer(sle)
 
-		if get_serial_nos(sle.serial_no):
+		dimensions = get_inventory_dimensions()
+		has_dimensions = False
+		if dimensions:
+			for dimension in dimensions:
+				if sle.get(dimension.get("fieldname")):
+					has_dimensions = True
+
+		if sle.serial_and_batch_bundle:
+			self.calculate_valuation_for_serial_batch_bundle(sle)
+		elif sle.serial_no and not self.args.get("sle_id"):
+			# Only run in reposting
 			self.get_serialized_values(sle)
 			self.wh_data.qty_after_transaction += flt(sle.actual_qty)
-			if sle.voucher_type == "Stock Reconciliation":
+			if sle.voucher_type == "Stock Reconciliation" and not sle.batch_no:
 				self.wh_data.qty_after_transaction = sle.qty_after_transaction
 
 			self.wh_data.stock_value = flt(self.wh_data.qty_after_transaction) * flt(
 				self.wh_data.valuation_rate
 			)
-		elif sle.batch_no and dontmanage.db.get_value(
-			"Batch", sle.batch_no, "use_batchwise_valuation", cache=True
+		elif (
+			sle.batch_no
+			and dontmanage.db.get_value("Batch", sle.batch_no, "use_batchwise_valuation", cache=True)
+			and not self.args.get("sle_id")
 		):
+			# Only run in reposting
 			self.update_batched_values(sle)
 		else:
-			if sle.voucher_type == "Stock Reconciliation" and not sle.batch_no:
+			if sle.voucher_type == "Stock Reconciliation" and not sle.batch_no and not has_dimensions:
 				# assert
 				self.wh_data.valuation_rate = sle.valuation_rate
 				self.wh_data.qty_after_transaction = sle.qty_after_transaction
@@ -589,6 +789,7 @@ class update_entries_after(object):
 		self.wh_data.stock_value = flt(self.wh_data.stock_value, self.currency_precision)
 		if not self.wh_data.qty_after_transaction:
 			self.wh_data.stock_value = 0.0
+
 		stock_value_difference = self.wh_data.stock_value - self.wh_data.prev_stock_value
 		self.wh_data.prev_stock_value = self.wh_data.stock_value
 
@@ -597,20 +798,121 @@ class update_entries_after(object):
 		sle.valuation_rate = self.wh_data.valuation_rate
 		sle.stock_value = self.wh_data.stock_value
 		sle.stock_queue = json.dumps(self.wh_data.stock_queue)
-		sle.stock_value_difference = stock_value_difference
-		sle.doctype = "Stock Ledger Entry"
 
+		if not sle.is_adjustment_entry or not self.args.get("sle_id"):
+			sle.stock_value_difference = stock_value_difference
+
+		sle.doctype = "Stock Ledger Entry"
 		dontmanage.get_doc(sle).db_update()
 
-		if not self.args.get("sle_id"):
+		if not self.args.get("sle_id") or (
+			sle.serial_and_batch_bundle and sle.auto_created_serial_and_batch_bundle
+		):
 			self.update_outgoing_rate_on_transaction(sle)
+
+	def get_serialized_values(self, sle):
+		incoming_rate = flt(sle.incoming_rate)
+		actual_qty = flt(sle.actual_qty)
+		serial_nos = cstr(sle.serial_no).split("\n")
+
+		if incoming_rate < 0:
+			# wrong incoming rate
+			incoming_rate = self.wh_data.valuation_rate
+
+		stock_value_change = 0
+		if actual_qty > 0:
+			stock_value_change = actual_qty * incoming_rate
+		else:
+			# In case of delivery/stock issue, get average purchase rate
+			# of serial nos of current entry
+			if not sle.is_cancelled:
+				outgoing_value = self.get_incoming_value_for_serial_nos(sle, serial_nos)
+				stock_value_change = -1 * outgoing_value
+			else:
+				stock_value_change = actual_qty * sle.outgoing_rate
+
+		new_stock_qty = self.wh_data.qty_after_transaction + actual_qty
+
+		if new_stock_qty > 0:
+			new_stock_value = (
+				self.wh_data.qty_after_transaction * self.wh_data.valuation_rate
+			) + stock_value_change
+			if new_stock_value >= 0:
+				# calculate new valuation rate only if stock value is positive
+				# else it remains the same as that of previous entry
+				self.wh_data.valuation_rate = new_stock_value / new_stock_qty
+
+		if not self.wh_data.valuation_rate and sle.voucher_detail_no:
+			allow_zero_rate = self.check_if_allow_zero_valuation_rate(
+				sle.voucher_type, sle.voucher_detail_no
+			)
+			if not allow_zero_rate:
+				self.wh_data.valuation_rate = self.get_fallback_rate(sle)
+
+	def reset_actual_qty_for_stock_reco(self, sle):
+		doc = dontmanage.get_cached_doc("Stock Reconciliation", sle.voucher_no)
+		doc.recalculate_current_qty(sle.voucher_detail_no, sle.creation, sle.actual_qty > 0)
+
+		if sle.actual_qty < 0:
+			sle.actual_qty = (
+				flt(dontmanage.db.get_value("Stock Reconciliation Item", sle.voucher_detail_no, "current_qty"))
+				* -1
+			)
+
+			if abs(sle.actual_qty) == 0.0:
+				sle.is_cancelled = 1
+
+		if sle.serial_and_batch_bundle and dontmanage.get_cached_value(
+			"Item", sle.item_code, "has_serial_no"
+		):
+			self.update_serial_no_status(sle)
+
+	def update_serial_no_status(self, sle):
+		from dontmanageerp.stock.serial_batch_bundle import get_serial_nos
+
+		serial_nos = get_serial_nos(sle.serial_and_batch_bundle)
+		if not serial_nos:
+			return
+
+		warehouse = None
+		status = "Inactive"
+
+		if sle.actual_qty > 0:
+			warehouse = sle.warehouse
+			status = "Active"
+
+		sn_table = dontmanage.qb.DocType("Serial No")
+
+		query = (
+			dontmanage.qb.update(sn_table)
+			.set(sn_table.warehouse, warehouse)
+			.set(sn_table.status, status)
+			.where(sn_table.name.isin(serial_nos))
+		)
+
+		query.run()
+
+	def calculate_valuation_for_serial_batch_bundle(self, sle):
+		doc = dontmanage.get_cached_doc("Serial and Batch Bundle", sle.serial_and_batch_bundle)
+
+		doc.set_incoming_rate(save=True, allow_negative_stock=self.allow_negative_stock)
+		doc.calculate_qty_and_amount(save=True)
+
+		self.wh_data.stock_value = round_off_if_near_zero(self.wh_data.stock_value + doc.total_amount)
+
+		precision = doc.precision("total_qty")
+		self.wh_data.qty_after_transaction += flt(doc.total_qty, precision)
+		if flt(self.wh_data.qty_after_transaction, precision):
+			self.wh_data.valuation_rate = flt(self.wh_data.stock_value, precision) / flt(
+				self.wh_data.qty_after_transaction, precision
+			)
 
 	def validate_negative_stock(self, sle):
 		"""
 		validate negative stock for entries current datetime onwards
 		will not consider cancelled entries
 		"""
-		diff = self.wh_data.qty_after_transaction + flt(sle.actual_qty)
+		diff = self.wh_data.qty_after_transaction + flt(sle.actual_qty) - flt(self.reserved_stock)
 		diff = flt(diff, self.flt_precision)  # respect system precision
 
 		if diff < 0 and abs(diff) > 0.0001:
@@ -650,18 +952,37 @@ class update_entries_after(object):
 					get_rate_for_return,  # don't move this import to top
 				)
 
-				rate = get_rate_for_return(
-					sle.voucher_type,
-					sle.voucher_no,
-					sle.item_code,
-					voucher_detail_no=sle.voucher_detail_no,
-					sle=sle,
-				)
+				if self.valuation_method == "Moving Average":
+					rate = get_incoming_rate(
+						{
+							"item_code": sle.item_code,
+							"warehouse": sle.warehouse,
+							"posting_date": sle.posting_date,
+							"posting_time": sle.posting_time,
+							"qty": sle.actual_qty,
+							"serial_no": sle.get("serial_no"),
+							"batch_no": sle.get("batch_no"),
+							"serial_and_batch_bundle": sle.get("serial_and_batch_bundle"),
+							"company": sle.company,
+							"voucher_type": sle.voucher_type,
+							"voucher_no": sle.voucher_no,
+							"allow_zero_valuation": self.allow_zero_rate,
+							"sle": sle.name,
+						}
+					)
 
+				else:
+					rate = get_rate_for_return(
+						sle.voucher_type,
+						sle.voucher_no,
+						sle.item_code,
+						voucher_detail_no=sle.voucher_detail_no,
+						sle=sle,
+					)
 			elif (
 				sle.voucher_type in ["Purchase Receipt", "Purchase Invoice"]
 				and sle.voucher_detail_no
-				and dontmanage.get_cached_value(sle.voucher_type, sle.voucher_no, "is_internal_supplier")
+				and is_internal_transfer(sle)
 			):
 				rate = get_incoming_rate_for_inter_company_transfer(sle)
 			else:
@@ -711,6 +1032,8 @@ class update_entries_after(object):
 				self.update_rate_on_purchase_receipt(sle, outgoing_rate)
 			elif flt(sle.actual_qty) < 0 and sle.voucher_type == "Subcontracting Receipt":
 				self.update_rate_on_subcontracting_receipt(sle, outgoing_rate)
+		elif sle.voucher_type == "Stock Reconciliation":
+			self.update_rate_on_stock_reconciliation(sle)
 
 	def update_rate_on_stock_entry(self, sle, outgoing_rate):
 		dontmanage.db.set_value("Stock Entry Detail", sle.voucher_detail_no, "basic_rate", outgoing_rate)
@@ -763,51 +1086,53 @@ class update_entries_after(object):
 				d.db_update()
 
 	def update_rate_on_subcontracting_receipt(self, sle, outgoing_rate):
-		if dontmanage.db.exists(sle.voucher_type + " Item", sle.voucher_detail_no):
-			dontmanage.db.set_value(sle.voucher_type + " Item", sle.voucher_detail_no, "rate", outgoing_rate)
+		if dontmanage.db.exists("Subcontracting Receipt Item", sle.voucher_detail_no):
+			dontmanage.db.set_value("Subcontracting Receipt Item", sle.voucher_detail_no, "rate", outgoing_rate)
 		else:
 			dontmanage.db.set_value(
-				"Subcontracting Receipt Supplied Item", sle.voucher_detail_no, "rate", outgoing_rate
+				"Subcontracting Receipt Supplied Item",
+				sle.voucher_detail_no,
+				{"rate": outgoing_rate, "amount": abs(sle.actual_qty) * outgoing_rate},
 			)
 
-	def get_serialized_values(self, sle):
-		incoming_rate = flt(sle.incoming_rate)
-		actual_qty = flt(sle.actual_qty)
-		serial_nos = cstr(sle.serial_no).split("\n")
+		scr = dontmanage.get_doc("Subcontracting Receipt", sle.voucher_no, for_update=True)
+		scr.calculate_items_qty_and_amount()
+		scr.db_update()
+		for d in scr.items:
+			d.db_update()
 
-		if incoming_rate < 0:
-			# wrong incoming rate
-			incoming_rate = self.wh_data.valuation_rate
+	def update_rate_on_stock_reconciliation(self, sle):
+		if not sle.serial_no and not sle.batch_no:
+			sr = dontmanage.get_doc("Stock Reconciliation", sle.voucher_no, for_update=True)
 
-		stock_value_change = 0
-		if actual_qty > 0:
-			stock_value_change = actual_qty * incoming_rate
-		else:
-			# In case of delivery/stock issue, get average purchase rate
-			# of serial nos of current entry
-			if not sle.is_cancelled:
-				outgoing_value = self.get_incoming_value_for_serial_nos(sle, serial_nos)
-				stock_value_change = -1 * outgoing_value
+			for item in sr.items:
+				# Skip for Serial and Batch Items
+				if item.name != sle.voucher_detail_no or item.serial_no or item.batch_no:
+					continue
+
+				previous_sle = get_previous_sle(
+					{
+						"item_code": item.item_code,
+						"warehouse": item.warehouse,
+						"posting_date": sr.posting_date,
+						"posting_time": sr.posting_time,
+						"sle": sle.name,
+					}
+				)
+
+				item.current_qty = previous_sle.get("qty_after_transaction") or 0.0
+				item.current_valuation_rate = previous_sle.get("valuation_rate") or 0.0
+				item.current_amount = flt(item.current_qty) * flt(item.current_valuation_rate)
+
+				item.amount = flt(item.qty) * flt(item.valuation_rate)
+				item.quantity_difference = item.qty - item.current_qty
+				item.amount_difference = item.amount - item.current_amount
 			else:
-				stock_value_change = actual_qty * sle.outgoing_rate
+				sr.difference_amount = sum([item.amount_difference for item in sr.items])
+			sr.db_update()
 
-		new_stock_qty = self.wh_data.qty_after_transaction + actual_qty
-
-		if new_stock_qty > 0:
-			new_stock_value = (
-				self.wh_data.qty_after_transaction * self.wh_data.valuation_rate
-			) + stock_value_change
-			if new_stock_value >= 0:
-				# calculate new valuation rate only if stock value is positive
-				# else it remains the same as that of previous entry
-				self.wh_data.valuation_rate = new_stock_value / new_stock_qty
-
-		if not self.wh_data.valuation_rate and sle.voucher_detail_no:
-			allow_zero_rate = self.check_if_allow_zero_valuation_rate(
-				sle.voucher_type, sle.voucher_detail_no
-			)
-			if not allow_zero_rate:
-				self.wh_data.valuation_rate = self.get_fallback_rate(sle)
+			for item in sr.items:
+				item.db_update()
 
 	def get_incoming_value_for_serial_nos(self, sle, serial_nos):
 		# get rate from serial nos within same company
@@ -951,6 +1276,7 @@ class update_entries_after(object):
 				posting_time=sle.posting_time,
 				creation=sle.creation,
 			)
+
 			if outgoing_rate is None:
 				# This can *only* happen if qty available for the batch is zero.
 				# in such case fall back various other rates.
@@ -989,7 +1315,6 @@ class update_entries_after(object):
 			self.allow_zero_rate,
 			currency=dontmanageerp.get_company_currency(sle.company),
 			company=sle.company,
-			batch_no=sle.batch_no,
 		)
 
 	def get_sle_before_datetime(self, args):
@@ -1013,7 +1338,7 @@ class update_entries_after(object):
 			) in dontmanage.local.flags.currently_saving:
 
 				msg = _("{0} units of {1} needed in {2} to complete this transaction.").format(
-					abs(deficiency),
+					dontmanage.bold(abs(deficiency)),
 					dontmanage.get_desk_link("Item", exceptions[0]["item_code"]),
 					dontmanage.get_desk_link("Warehouse", warehouse),
 				)
@@ -1021,7 +1346,7 @@ class update_entries_after(object):
 				msg = _(
 					"{0} units of {1} needed in {2} on {3} {4} for {5} to complete this transaction."
 				).format(
-					abs(deficiency),
+					dontmanage.bold(abs(deficiency)),
 					dontmanage.get_desk_link("Item", exceptions[0]["item_code"]),
 					dontmanage.get_desk_link("Warehouse", warehouse),
 					exceptions[0]["posting_date"],
@@ -1030,6 +1355,18 @@ class update_entries_after(object):
 				)
 
 			if msg:
+				if self.reserved_stock:
+					allowed_qty = abs(exceptions[0]["actual_qty"]) - abs(exceptions[0]["diff"])
+
+					if allowed_qty > 0:
+						msg = "{0} As {1} units are reserved for other sales orders, you are allowed to consume only {2} units.".format(
+							msg, dontmanage.bold(self.reserved_stock), dontmanage.bold(allowed_qty)
+						)
+					else:
+						msg = "{0} As the full stock is reserved for other sales orders, you're not allowed to consume the stock.".format(
+							msg,
+						)
+
 				msg_list.append(msg)
 
 		if msg_list:
@@ -1038,6 +1375,18 @@ class update_entries_after(object):
 				dontmanage.throw(message, NegativeStockError, title=_("Insufficient Stock"))
 			else:
 				raise NegativeStockError(message)
+
+	def update_bin_data(self, sle):
+		bin_name = get_or_make_bin(sle.item_code, sle.warehouse)
+		values_to_update = {
+			"actual_qty": sle.qty_after_transaction,
+			"stock_value": sle.stock_value,
+		}
+
+		if sle.valuation_rate is not None:
+			values_to_update["valuation_rate"] = sle.valuation_rate
+
+		dontmanage.db.set_value("Bin", bin_name, values_to_update)
 
 	def update_bin(self):
 		# update bin for each warehouse
@@ -1053,11 +1402,11 @@ class update_entries_after(object):
 def get_previous_sle_of_current_voucher(args, operator="<", exclude_current_voucher=False):
 	"""get stock ledger entries filtered by specific posting datetime conditions"""
 
-	args["time_format"] = "%H:%i:%s"
 	if not args.get("posting_date"):
-		args["posting_date"] = "1900-01-01"
-	if not args.get("posting_time"):
-		args["posting_time"] = "00:00"
+		args["posting_datetime"] = "1900-01-01 00:00:00"
+
+	if not args.get("posting_datetime"):
+		args["posting_datetime"] = get_combine_datetime(args["posting_date"], args["posting_time"])
 
 	voucher_condition = ""
 	if exclude_current_voucher:
@@ -1066,23 +1415,20 @@ def get_previous_sle_of_current_voucher(args, operator="<", exclude_current_vouc
 
 	sle = dontmanage.db.sql(
 		"""
-		select *, timestamp(posting_date, posting_time) as "timestamp"
+		select *, posting_datetime as "timestamp"
 		from `tabStock Ledger Entry`
 		where item_code = %(item_code)s
 			and warehouse = %(warehouse)s
 			and is_cancelled = 0
 			{voucher_condition}
 			and (
-				posting_date < %(posting_date)s or
-				(
-					posting_date = %(posting_date)s and
-					time_format(posting_time, %(time_format)s) {operator} time_format(%(posting_time)s, %(time_format)s)
-				)
+				posting_datetime {operator} %(posting_datetime)s
 			)
-		order by timestamp(posting_date, posting_time) desc, creation desc
+		order by posting_datetime desc, creation desc
 		limit 1
 		for update""".format(
-			operator=operator, voucher_condition=voucher_condition
+			operator=operator,
+			voucher_condition=voucher_condition,
 		),
 		args,
 		as_dict=1,
@@ -1091,7 +1437,7 @@ def get_previous_sle_of_current_voucher(args, operator="<", exclude_current_vouc
 	return sle[0] if sle else dontmanage._dict()
 
 
-def get_previous_sle(args, for_update=False):
+def get_previous_sle(args, for_update=False, extra_cond=None):
 	"""
 	get the last sle on or before the current time-bucket,
 	to get actual qty before transaction, this function
@@ -1106,7 +1452,9 @@ def get_previous_sle(args, for_update=False):
 	}
 	"""
 	args["name"] = args.get("sle", None) or ""
-	sle = get_stock_ledger_entries(args, "<=", "desc", "limit 1", for_update=for_update)
+	sle = get_stock_ledger_entries(
+		args, "<=", "desc", "limit 1", for_update=for_update, extra_cond=extra_cond
+	)
 	return sle and sle[0] or {}
 
 
@@ -1118,11 +1466,10 @@ def get_stock_ledger_entries(
 	for_update=False,
 	debug=False,
 	check_serial_no=True,
+	extra_cond=None,
 ):
 	"""get stock ledger entries filtered by specific posting datetime conditions"""
-	conditions = " and timestamp(posting_date, posting_time) {0} timestamp(%(posting_date)s, %(posting_time)s)".format(
-		operator
-	)
+	conditions = " and posting_datetime {0} %(posting_datetime)s".format(operator)
 	if previous_sle.get("warehouse"):
 		conditions += " and warehouse = %(warehouse)s"
 	elif previous_sle.get("warehouse_condition"):
@@ -1148,21 +1495,26 @@ def get_stock_ledger_entries(
 		)
 
 	if not previous_sle.get("posting_date"):
-		previous_sle["posting_date"] = "1900-01-01"
-	if not previous_sle.get("posting_time"):
-		previous_sle["posting_time"] = "00:00"
+		previous_sle["posting_datetime"] = "1900-01-01 00:00:00"
+	else:
+		previous_sle["posting_datetime"] = get_combine_datetime(
+			previous_sle["posting_date"], previous_sle["posting_time"]
+		)
 
 	if operator in (">", "<=") and previous_sle.get("name"):
 		conditions += " and name!=%(name)s"
 
+	if extra_cond:
+		conditions += f"{extra_cond}"
+
 	return dontmanage.db.sql(
 		"""
-		select *, timestamp(posting_date, posting_time) as "timestamp"
+		select *, posting_datetime as "timestamp"
 		from `tabStock Ledger Entry`
 		where item_code = %%(item_code)s
 		and is_cancelled = 0
 		%(conditions)s
-		order by timestamp(posting_date, posting_time) %(order)s, creation %(order)s
+		order by posting_datetime %(order)s, creation %(order)s
 		%(limit)s %(for_update)s"""
 		% {
 			"conditions": conditions,
@@ -1183,9 +1535,12 @@ def get_sle_by_voucher_detail_no(voucher_detail_no, excluded_sle=None):
 		[
 			"item_code",
 			"warehouse",
+			"actual_qty",
+			"qty_after_transaction",
 			"posting_date",
 			"posting_time",
-			"timestamp(posting_date, posting_time) as timestamp",
+			"voucher_detail_no",
+			"posting_datetime as timestamp",
 		],
 		as_dict=1,
 	)
@@ -1197,13 +1552,10 @@ def get_batch_incoming_rate(
 
 	sle = dontmanage.qb.DocType("Stock Ledger Entry")
 
-	timestamp_condition = CombineDatetime(sle.posting_date, sle.posting_time) < CombineDatetime(
-		posting_date, posting_time
-	)
+	timestamp_condition = sle.posting_datetime < get_combine_datetime(posting_date, posting_time)
 	if creation:
 		timestamp_condition |= (
-			CombineDatetime(sle.posting_date, sle.posting_time)
-			== CombineDatetime(posting_date, posting_time)
+			sle.posting_datetime == get_combine_datetime(posting_date, posting_time)
 		) & (sle.creation < creation)
 
 	batch_details = (
@@ -1232,45 +1584,61 @@ def get_valuation_rate(
 	company=None,
 	raise_error_if_no_rate=True,
 	batch_no=None,
+	serial_and_batch_bundle=None,
 ):
+
+	from dontmanageerp.stock.serial_batch_bundle import BatchNoValuation
 
 	if not company:
 		company = dontmanage.get_cached_value("Warehouse", warehouse, "company")
 
-	last_valuation_rate = None
+	if warehouse and batch_no and dontmanage.db.get_value("Batch", batch_no, "use_batchwise_valuation"):
+		table = dontmanage.qb.DocType("Stock Ledger Entry")
+		query = (
+			dontmanage.qb.from_(table)
+			.select(Sum(table.stock_value_difference) / Sum(table.actual_qty))
+			.where(
+				(table.item_code == item_code)
+				& (table.warehouse == warehouse)
+				& (table.batch_no == batch_no)
+				& (table.is_cancelled == 0)
+				& (table.voucher_no != voucher_no)
+				& (table.voucher_type != voucher_type)
+			)
+		)
+
+		last_valuation_rate = query.run()
+		if last_valuation_rate:
+			return flt(last_valuation_rate[0][0])
 
 	# Get moving average rate of a specific batch number
-	if warehouse and batch_no and dontmanage.db.get_value("Batch", batch_no, "use_batchwise_valuation"):
-		last_valuation_rate = dontmanage.db.sql(
-			"""
-			select sum(stock_value_difference) / sum(actual_qty)
-			from `tabStock Ledger Entry`
-			where
-				item_code = %s
-				AND warehouse = %s
-				AND batch_no = %s
-				AND is_cancelled = 0
-				AND NOT (voucher_no = %s AND voucher_type = %s)
-			""",
-			(item_code, warehouse, batch_no, voucher_no, voucher_type),
+	if warehouse and serial_and_batch_bundle:
+		batch_obj = BatchNoValuation(
+			sle=dontmanage._dict(
+				{
+					"item_code": item_code,
+					"warehouse": warehouse,
+					"actual_qty": -1,
+					"serial_and_batch_bundle": serial_and_batch_bundle,
+				}
+			)
 		)
+
+		return batch_obj.get_incoming_rate()
 
 	# Get valuation rate from last sle for the same item and warehouse
-	if not last_valuation_rate or last_valuation_rate[0][0] is None:
-		last_valuation_rate = dontmanage.db.sql(
-			"""select valuation_rate
-			from `tabStock Ledger Entry` force index (item_warehouse)
-			where
-				item_code = %s
-				AND warehouse = %s
-				AND valuation_rate >= 0
-				AND is_cancelled = 0
-				AND NOT (voucher_no = %s AND voucher_type = %s)
-			order by posting_date desc, posting_time desc, name desc limit 1""",
-			(item_code, warehouse, voucher_no, voucher_type),
-		)
-
-	if last_valuation_rate:
+	if last_valuation_rate := dontmanage.db.sql(
+		"""select valuation_rate
+		from `tabStock Ledger Entry` force index (item_warehouse)
+		where
+			item_code = %s
+			AND warehouse = %s
+			AND valuation_rate >= 0
+			AND is_cancelled = 0
+			AND NOT (voucher_no = %s AND voucher_type = %s)
+		order by posting_datetime desc, name desc limit 1""",
+		(item_code, warehouse, voucher_no, voucher_type),
+	):
 		return flt(last_valuation_rate[0][0])
 
 	# If negative stock allowed, and item delivered without any incoming entry,
@@ -1327,7 +1695,7 @@ def update_qty_in_future_sle(args, allow_negative_stock=False):
 	datetime_limit_condition = ""
 	qty_shift = args.actual_qty
 
-	args["time_format"] = "%H:%i:%s"
+	args["posting_datetime"] = get_combine_datetime(args["posting_date"], args["posting_time"])
 
 	# find difference/shift in qty caused by stock reconciliation
 	if args.voucher_type == "Stock Reconciliation":
@@ -1337,7 +1705,6 @@ def update_qty_in_future_sle(args, allow_negative_stock=False):
 	next_stock_reco_detail = get_next_stock_reco(args)
 	if next_stock_reco_detail:
 		detail = next_stock_reco_detail[0]
-		# add condition to update SLEs before this date & time
 		datetime_limit_condition = get_datetime_limit_condition(detail)
 
 	dontmanage.db.sql(
@@ -1350,13 +1717,9 @@ def update_qty_in_future_sle(args, allow_negative_stock=False):
 			and voucher_no != %(voucher_no)s
 			and is_cancelled = 0
 			and (
-				posting_date > %(posting_date)s or
-				(
-					posting_date = %(posting_date)s and
-					time_format(posting_time, %(time_format)s) > time_format(%(posting_time)s, %(time_format)s)
-				)
+				posting_datetime > %(posting_datetime)s
 			)
-		{datetime_limit_condition}
+			{datetime_limit_condition}
 		""",
 		args,
 	)
@@ -1387,41 +1750,55 @@ def get_stock_reco_qty_shift(args):
 	return stock_reco_qty_shift
 
 
-def get_next_stock_reco(args):
+def get_next_stock_reco(kwargs):
 	"""Returns next nearest stock reconciliaton's details."""
 
-	return dontmanage.db.sql(
-		"""
-		select
-			name, posting_date, posting_time, creation, voucher_no
-		from
-			`tabStock Ledger Entry`
-		where
-			item_code = %(item_code)s
-			and warehouse = %(warehouse)s
-			and voucher_type = 'Stock Reconciliation'
-			and voucher_no != %(voucher_no)s
-			and is_cancelled = 0
-			and (timestamp(posting_date, posting_time) > timestamp(%(posting_date)s, %(posting_time)s)
-				or (
-					timestamp(posting_date, posting_time) = timestamp(%(posting_date)s, %(posting_time)s)
-					and creation > %(creation)s
-				)
+	sle = dontmanage.qb.DocType("Stock Ledger Entry")
+
+	query = (
+		dontmanage.qb.from_(sle)
+		.select(
+			sle.name,
+			sle.posting_date,
+			sle.posting_time,
+			sle.creation,
+			sle.voucher_no,
+			sle.item_code,
+			sle.batch_no,
+			sle.serial_and_batch_bundle,
+			sle.actual_qty,
+			sle.has_batch_no,
+		)
+		.where(
+			(sle.item_code == kwargs.get("item_code"))
+			& (sle.warehouse == kwargs.get("warehouse"))
+			& (sle.voucher_type == "Stock Reconciliation")
+			& (sle.voucher_no != kwargs.get("voucher_no"))
+			& (sle.is_cancelled == 0)
+			& (
+				sle.posting_datetime
+				>= get_combine_datetime(kwargs.get("posting_date"), kwargs.get("posting_time"))
 			)
-		order by timestamp(posting_date, posting_time) asc, creation asc
-		limit 1
-	""",
-		args,
-		as_dict=1,
+		)
+		.orderby(sle.posting_datetime)
+		.orderby(sle.creation)
+		.limit(1)
 	)
+
+	if kwargs.get("batch_no"):
+		query = query.where(sle.batch_no == kwargs.get("batch_no"))
+
+	return query.run(as_dict=True)
 
 
 def get_datetime_limit_condition(detail):
+	posting_datetime = get_combine_datetime(detail.posting_date, detail.posting_time)
+
 	return f"""
 		and
-		(timestamp(posting_date, posting_time) < timestamp('{detail.posting_date}', '{detail.posting_time}')
+		(posting_datetime < '{posting_datetime}'
 			or (
-				timestamp(posting_date, posting_time) = timestamp('{detail.posting_date}', '{detail.posting_time}')
+				posting_datetime = '{posting_datetime}'
 				and creation < '{detail.creation}'
 			)
 		)"""
@@ -1449,22 +1826,23 @@ def validate_negative_qty_in_future_sle(args, allow_negative_stock=False):
 
 		dontmanage.throw(message, NegativeStockError, title=_("Insufficient Stock"))
 
-	if not args.batch_no:
-		return
+	if args.batch_no:
+		neg_batch_sle = get_future_sle_with_negative_batch_qty(args)
+		if is_negative_with_precision(neg_batch_sle, is_batch=True):
+			message = _(
+				"{0} units of {1} needed in {2} on {3} {4} for {5} to complete this transaction."
+			).format(
+				abs(neg_batch_sle[0]["cumulative_total"]),
+				dontmanage.get_desk_link("Batch", args.batch_no),
+				dontmanage.get_desk_link("Warehouse", args.warehouse),
+				neg_batch_sle[0]["posting_date"],
+				neg_batch_sle[0]["posting_time"],
+				dontmanage.get_desk_link(neg_batch_sle[0]["voucher_type"], neg_batch_sle[0]["voucher_no"]),
+			)
+			dontmanage.throw(message, NegativeStockError, title=_("Insufficient Stock for Batch"))
 
-	neg_batch_sle = get_future_sle_with_negative_batch_qty(args)
-	if is_negative_with_precision(neg_batch_sle, is_batch=True):
-		message = _(
-			"{0} units of {1} needed in {2} on {3} {4} for {5} to complete this transaction."
-		).format(
-			abs(neg_batch_sle[0]["cumulative_total"]),
-			dontmanage.get_desk_link("Batch", args.batch_no),
-			dontmanage.get_desk_link("Warehouse", args.warehouse),
-			neg_batch_sle[0]["posting_date"],
-			neg_batch_sle[0]["posting_time"],
-			dontmanage.get_desk_link(neg_batch_sle[0]["voucher_type"], neg_batch_sle[0]["voucher_no"]),
-		)
-		dontmanage.throw(message, NegativeStockError, title=_("Insufficient Stock for Batch"))
+	if args.reserved_stock:
+		validate_reserved_stock(args)
 
 
 def is_negative_with_precision(neg_sle, is_batch=False):
@@ -1494,10 +1872,10 @@ def get_future_sle_with_negative_qty(args):
 			item_code = %(item_code)s
 			and warehouse = %(warehouse)s
 			and voucher_no != %(voucher_no)s
-			and timestamp(posting_date, posting_time) >= timestamp(%(posting_date)s, %(posting_time)s)
+			and posting_datetime >= %(posting_datetime)s
 			and is_cancelled = 0
 			and qty_after_transaction < 0
-		order by timestamp(posting_date, posting_time) asc
+		order by posting_datetime asc
 		limit 1
 	""",
 		args,
@@ -1510,25 +1888,115 @@ def get_future_sle_with_negative_batch_qty(args):
 		"""
 		with batch_ledger as (
 			select
-				posting_date, posting_time, voucher_type, voucher_no,
-				sum(actual_qty) over (order by posting_date, posting_time, creation) as cumulative_total
+				posting_date, posting_time, posting_datetime, voucher_type, voucher_no,
+				sum(actual_qty) over (order by posting_datetime, creation) as cumulative_total
 			from `tabStock Ledger Entry`
 			where
 				item_code = %(item_code)s
 				and warehouse = %(warehouse)s
 				and batch_no=%(batch_no)s
 				and is_cancelled = 0
-			order by posting_date, posting_time, creation
+			order by posting_datetime, creation
 		)
 		select * from batch_ledger
 		where
 			cumulative_total < 0.0
-			and timestamp(posting_date, posting_time) >= timestamp(%(posting_date)s, %(posting_time)s)
+			and posting_datetime >= %(posting_datetime)s
 		limit 1
 	""",
 		args,
 		as_dict=1,
 	)
+
+
+def validate_reserved_stock(kwargs):
+	if kwargs.serial_no:
+		serial_nos = kwargs.serial_no.split("\n")
+		validate_reserved_serial_nos(kwargs.item_code, kwargs.warehouse, serial_nos)
+
+	elif kwargs.batch_no:
+		validate_reserved_batch_nos(kwargs.item_code, kwargs.warehouse, [kwargs.batch_no])
+
+	elif kwargs.serial_and_batch_bundle:
+		sbb_entries = dontmanage.db.get_all(
+			"Serial and Batch Entry",
+			{
+				"parenttype": "Serial and Batch Bundle",
+				"parent": kwargs.serial_and_batch_bundle,
+				"docstatus": 1,
+			},
+			["batch_no", "serial_no"],
+		)
+
+		if serial_nos := [entry.serial_no for entry in sbb_entries if entry.serial_no]:
+			validate_reserved_serial_nos(kwargs.item_code, kwargs.warehouse, serial_nos)
+		elif batch_nos := [entry.batch_no for entry in sbb_entries if entry.batch_no]:
+			validate_reserved_batch_nos(kwargs.item_code, kwargs.warehouse, batch_nos)
+
+	# Qty based validation for non-serial-batch items OR SRE with Reservation Based On Qty.
+	precision = cint(dontmanage.db.get_default("float_precision")) or 2
+	balance_qty = get_stock_balance(kwargs.item_code, kwargs.warehouse)
+
+	diff = flt(balance_qty - kwargs.get("reserved_stock", 0), precision)
+	if diff < 0 and abs(diff) > 0.0001:
+		msg = _("{0} units of {1} needed in {2} on {3} {4} to complete this transaction.").format(
+			abs(diff),
+			dontmanage.get_desk_link("Item", kwargs.item_code),
+			dontmanage.get_desk_link("Warehouse", kwargs.warehouse),
+			nowdate(),
+			nowtime(),
+		)
+		dontmanage.throw(msg, title=_("Reserved Stock"))
+
+
+def validate_reserved_serial_nos(item_code, warehouse, serial_nos):
+	if reserved_serial_nos_details := get_sre_reserved_serial_nos_details(
+		item_code, warehouse, serial_nos
+	):
+		if common_serial_nos := list(
+			set(serial_nos).intersection(set(reserved_serial_nos_details.keys()))
+		):
+			msg = _(
+				"Serial Nos are reserved in Stock Reservation Entries, you need to unreserve them before proceeding."
+			)
+			msg += "<br />"
+			msg += _("Example: Serial No {0} reserved in {1}.").format(
+				dontmanage.bold(common_serial_nos[0]),
+				dontmanage.get_desk_link(
+					"Stock Reservation Entry", reserved_serial_nos_details[common_serial_nos[0]]
+				),
+			)
+			dontmanage.throw(msg, title=_("Reserved Serial No."))
+
+
+def validate_reserved_batch_nos(item_code, warehouse, batch_nos):
+	if reserved_batches_map := get_sre_reserved_batch_nos_details(item_code, warehouse, batch_nos):
+		available_batches = get_available_batches(
+			dontmanage._dict(
+				{
+					"item_code": item_code,
+					"warehouse": warehouse,
+					"posting_date": nowdate(),
+					"posting_time": nowtime(),
+				}
+			)
+		)
+		available_batches_map = {row.batch_no: row.qty for row in available_batches}
+		precision = cint(dontmanage.db.get_default("float_precision")) or 2
+
+		for batch_no in batch_nos:
+			diff = flt(
+				available_batches_map.get(batch_no, 0) - reserved_batches_map.get(batch_no, 0), precision
+			)
+			if diff < 0 and abs(diff) > 0.0001:
+				msg = _("{0} units of {1} needed in {2} on {3} {4} to complete this transaction.").format(
+					abs(diff),
+					dontmanage.get_desk_link("Batch", batch_no),
+					dontmanage.get_desk_link("Warehouse", warehouse),
+					nowdate(),
+					nowtime(),
+				)
+				dontmanage.throw(msg, title=_("Reserved Stock for Batch"))
 
 
 def is_negative_stock_allowed(*, item_code: Optional[str] = None) -> bool:
@@ -1559,3 +2027,37 @@ def get_incoming_rate_for_inter_company_transfer(sle) -> float:
 		)
 
 	return rate
+
+
+def is_internal_transfer(sle):
+	data = dontmanage.get_cached_value(
+		sle.voucher_type,
+		sle.voucher_no,
+		["is_internal_supplier", "represents_company", "company"],
+		as_dict=True,
+	)
+
+	if data.is_internal_supplier and data.represents_company == data.company:
+		return True
+
+
+def get_stock_value_difference(item_code, warehouse, posting_date, posting_time, voucher_no=None):
+	table = dontmanage.qb.DocType("Stock Ledger Entry")
+	posting_datetime = get_combine_datetime(posting_date, posting_time)
+
+	query = (
+		dontmanage.qb.from_(table)
+		.select(Sum(table.stock_value_difference).as_("value"))
+		.where(
+			(table.is_cancelled == 0)
+			& (table.item_code == item_code)
+			& (table.warehouse == warehouse)
+			& (table.posting_datetime <= posting_datetime)
+		)
+	)
+
+	if voucher_no:
+		query = query.where(table.voucher_no != voucher_no)
+
+	difference_amount = query.run()
+	return flt(difference_amount[0][0]) if difference_amount else 0

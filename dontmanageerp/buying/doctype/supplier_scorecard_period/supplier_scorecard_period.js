@@ -1,9 +1,6 @@
 // Copyright (c) 2017, DontManage and contributors
 // For license information, please see license.txt
 
-/* global dontmanage */
-
-
 dontmanage.ui.form.on("Supplier Scorecard Period", {
 	onload: function(frm) {
 		let criteria_grid = frm.get_field("criteria").grid;

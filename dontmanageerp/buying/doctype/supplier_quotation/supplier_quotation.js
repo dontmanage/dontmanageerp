@@ -1,9 +1,7 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
 
-// attach required files
-{% include 'dontmanageerp/public/js/controllers/buying.js' %};
-
+dontmanageerp.buying.setup_buying_controller();
 dontmanageerp.buying.SupplierQuotationController = class SupplierQuotationController extends dontmanageerp.buying.BuyingController {
 	setup() {
 		this.frm.custom_make_buttons = {

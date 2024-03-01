@@ -2,7 +2,11 @@
 // License: GNU General Public License v3. See license.txt
 
 dontmanage.provide("dontmanageerp.accounts");
-{% include 'dontmanageerp/public/js/controllers/buying.js' %};
+
+dontmanageerp.accounts.payment_triggers.setup("Purchase Invoice");
+dontmanageerp.accounts.taxes.setup_tax_filters("Purchase Taxes and Charges");
+dontmanageerp.accounts.taxes.setup_tax_validations("Purchase Invoice");
+dontmanageerp.buying.setup_buying_controller();
 
 dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanageerp.buying.BuyingController {
 	setup(doc) {
@@ -31,7 +35,17 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 		super.onload();
 
 		// Ignore linked advances
-		this.frm.ignore_doctypes_on_cancel_all = ['Journal Entry', 'Payment Entry', 'Purchase Invoice', "Repost Payment Ledger"];
+		this.frm.ignore_doctypes_on_cancel_all = [
+			"Journal Entry",
+			"Payment Entry",
+			"Purchase Invoice",
+			"Repost Payment Ledger",
+			"Repost Accounting Ledger",
+			"Unreconcile Payment",
+			"Unreconcile Payment Entries",
+			"Serial and Batch Bundle",
+			"Bank Transaction",
+		];
 
 		if(!this.frm.doc.__islocal) {
 			// show credit_to in print format
@@ -54,9 +68,30 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 		hide_fields(this.frm.doc);
 		// Show / Hide button
 		this.show_general_ledger();
+		dontmanageerp.accounts.ledger_preview.show_accounting_ledger_preview(this.frm);
 
-		if(doc.update_stock==1 && doc.docstatus==1) {
+		if(doc.update_stock==1) {
 			this.show_stock_ledger();
+			dontmanageerp.accounts.ledger_preview.show_stock_ledger_preview(this.frm);
+		}
+
+		if (this.frm.doc.repost_required && this.frm.doc.docstatus===1) {
+			this.frm.set_intro(__("Accounting entries for this invoice need to be reposted. Please click on 'Repost' button to update."));
+			this.frm.add_custom_button(__('Repost Accounting Entries'),
+				() => {
+					this.frm.call({
+						doc: this.frm.doc,
+						method: 'repost_accounting_entries',
+						freeze: true,
+						freeze_message: __('Reposting...'),
+						callback: (r) => {
+							if (!r.exc) {
+								dontmanage.msgprint(__('Accounting Entries are reposted.'));
+								me.frm.refresh();
+							}
+						}
+					});
+				}).removeClass('btn-default').addClass('btn-warning');
 		}
 
 		if(!doc.is_return && doc.docstatus == 1 && doc.outstanding_amount != 0){
@@ -80,9 +115,12 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 			}
 		}
 
-		if(doc.docstatus == 1 && doc.outstanding_amount != 0
-			&& !(doc.is_return && doc.return_against) && !doc.on_hold) {
-			this.frm.add_custom_button(__('Payment'), this.make_payment_entry, __('Create'));
+		if(doc.docstatus == 1 && doc.outstanding_amount != 0 && !doc.on_hold) {
+			this.frm.add_custom_button(
+				__('Payment'),
+				() => this.make_payment_entry(),
+				__('Create')
+			);
 			cur_frm.page.set_inner_btn_group_as_primary(__('Create'));
 		}
 
@@ -90,12 +128,6 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 			if(doc.outstanding_amount >= 0 || Math.abs(flt(doc.outstanding_amount)) < flt(doc.grand_total)) {
 				cur_frm.add_custom_button(__('Return / Debit Note'),
 					this.make_debit_note, __('Create'));
-			}
-
-			if(!doc.auto_repeat) {
-				cur_frm.add_custom_button(__('Subscription'), function() {
-					dontmanageerp.utils.make_subscription(doc.doctype, doc.name)
-				}, __('Create'))
 			}
 		}
 
@@ -141,6 +173,18 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 					}
 				})
 			}, __("Get Items From"));
+
+			if (!this.frm.doc.is_return) {
+				dontmanage.db.get_single_value("Buying Settings", "maintain_same_rate").then((value) => {
+					if (value) {
+						this.frm.doc.items.forEach((item) => {
+							this.frm.fields_dict.items.grid.update_docfield_property(
+								"rate", "read_only", (item.purchase_receipt && item.pr_detail)
+							);
+						});
+					}
+				});
+			}
 		}
 		this.frm.toggle_reqd("supplier_warehouse", this.frm.doc.is_subcontracted);
 
@@ -158,6 +202,7 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 		}
 
 		this.frm.set_df_property("tax_withholding_category", "hidden", doc.apply_tds ? 0 : 1);
+		dontmanageerp.accounts.unreconcile_payment.add_unreconcile_btn(me.frm);
 	}
 
 	unblock_invoice() {
@@ -299,7 +344,7 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 
 	apply_tds(frm) {
 		var me = this;
-
+		me.frm.set_value("tax_withheld_vouchers", []);
 		if (!me.frm.doc.apply_tds) {
 			me.frm.set_value("tax_withholding_category", '');
 			me.frm.set_df_property("tax_withholding_category", "hidden", 1);
@@ -373,6 +418,8 @@ dontmanageerp.accounts.PurchaseInvoice = class PurchaseInvoice extends dontmanag
 	}
 
 	on_submit() {
+		super.on_submit();
+
 		$.each(this.frm.doc["items"] || [], function(i, row) {
 			if(row.purchase_receipt) dontmanage.model.clear_doc("Purchase Receipt", row.purchase_receipt)
 		})
@@ -456,6 +503,12 @@ cur_frm.set_query("expense_account", "items", function(doc) {
 	}
 });
 
+cur_frm.set_query("wip_composite_asset", "items", function() {
+	return {
+		filters: {'is_composite_asset': 1, 'docstatus': 0 }
+	}
+});
+
 cur_frm.cscript.expense_account = function(doc, cdt, cdn){
 	var d = locals[cdt][cdn];
 	if(d.idx == 1 && d.expense_account){
@@ -500,7 +553,8 @@ dontmanage.ui.form.on("Purchase Invoice", {
 	setup: function(frm) {
 		frm.custom_make_buttons = {
 			'Purchase Invoice': 'Return / Debit Note',
-			'Payment Entry': 'Payment'
+			'Payment Entry': 'Payment',
+			'Landed Cost Voucher': function () { frm.trigger('create_landed_cost_voucher') },
 		}
 
 		frm.set_query("additional_discount_account", function() {
@@ -536,6 +590,26 @@ dontmanage.ui.form.on("Purchase Invoice", {
 
 	refresh: function(frm) {
 		frm.events.add_custom_buttons(frm);
+	},
+
+	mode_of_payment: function(frm) {
+		dontmanageerp.accounts.pos.get_payment_mode_account(frm, frm.doc.mode_of_payment, function(account) {
+			frm.set_value("cash_bank_account", account);
+		})
+	},
+
+	create_landed_cost_voucher: function (frm) {
+		let lcv = dontmanage.model.get_new_doc('Landed Cost Voucher');
+		lcv.company = frm.doc.company;
+
+		let lcv_receipt = dontmanage.model.get_new_doc('Landed Cost Purchase Invoice');
+		lcv_receipt.receipt_document_type = 'Purchase Invoice';
+		lcv_receipt.receipt_document = frm.doc.name;
+		lcv_receipt.supplier = frm.doc.supplier;
+		lcv_receipt.grand_total = frm.doc.grand_total;
+		lcv.purchase_receipts = [lcv_receipt];
+
+		dontmanage.set_route("Form", lcv.doctype, lcv.name);
 	},
 
 	add_custom_buttons: function(frm) {

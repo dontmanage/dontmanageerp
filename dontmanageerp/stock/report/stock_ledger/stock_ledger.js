@@ -82,6 +82,20 @@ dontmanage.query_reports["Stock Ledger"] = {
 			"label": __("Include UOM"),
 			"fieldtype": "Link",
 			"options": "UOM"
+		},
+		{
+			"fieldname": "valuation_field_type",
+			"label": __("Valuation Field Type"),
+			"fieldtype": "Select",
+			"width": "80",
+			"options": "Currency\nFloat",
+			"default": "Currency"
+		},
+		{
+			"fieldname": "segregate_serial_batch_bundle",
+			"label": __("Segregate Serial / Batch Bundle"),
+			"fieldtype": "Check",
+			"default": 0
 		}
 	],
 	"formatter": function (value, row, column, data, default_formatter) {

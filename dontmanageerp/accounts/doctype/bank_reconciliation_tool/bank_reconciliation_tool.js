@@ -19,7 +19,7 @@ dontmanage.ui.form.on("Bank Reconciliation Tool", {
 
 	onload: function (frm) {
 		// Set default filter dates
-		today = dontmanage.datetime.get_today()
+		let today = dontmanage.datetime.get_today()
 		frm.doc.bank_statement_from_date = dontmanage.datetime.add_months(today, -1);
 		frm.doc.bank_statement_to_date = today;
 		frm.trigger('bank_account');
@@ -81,7 +81,7 @@ dontmanage.ui.form.on("Bank Reconciliation Tool", {
 		frm.add_custom_button(__('Get Unreconciled Entries'), function() {
 			frm.trigger("make_reconciliation_tool");
 		});
-		frm.change_custom_button_type('Get Unreconciled Entries', null, 'primary');
+		frm.change_custom_button_type(__('Get Unreconciled Entries'), null, 'primary');
 
 	},
 
@@ -137,7 +137,7 @@ dontmanage.ui.form.on("Bank Reconciliation Tool", {
 					"dontmanageerp.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool.get_account_balance",
 				args: {
 					bank_account: frm.doc.bank_account,
-					till_date: frm.doc.bank_statement_from_date,
+					till_date: dontmanage.datetime.add_days(frm.doc.bank_statement_from_date, -1)
 				},
 				callback: (response) => {
 					frm.set_value("account_opening_balance", response.message);

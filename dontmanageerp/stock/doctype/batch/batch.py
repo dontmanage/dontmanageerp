@@ -2,10 +2,13 @@
 # License: GNU General Public License v3. See license.txt
 
 
+from collections import defaultdict
+
 import dontmanage
 from dontmanage import _
 from dontmanage.model.document import Document
 from dontmanage.model.naming import make_autoname, revert_series_if_last
+from dontmanage.query_builder.functions import CurDate, Sum
 from dontmanage.utils import cint, flt, get_link_to_form
 from dontmanage.utils.data import add_days
 from dontmanage.utils.jinja import render_template
@@ -84,6 +87,33 @@ def get_batch_naming_series():
 
 
 class Batch(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		batch_id: DF.Data
+		batch_qty: DF.Float
+		description: DF.SmallText | None
+		disabled: DF.Check
+		expiry_date: DF.Date | None
+		image: DF.AttachImage | None
+		item: DF.Link
+		item_name: DF.Data | None
+		manufacturing_date: DF.Date | None
+		parent_batch: DF.Link | None
+		produced_qty: DF.Float
+		qty_to_produce: DF.Float
+		reference_doctype: DF.Link | None
+		reference_name: DF.DynamicLink | None
+		stock_uom: DF.Link | None
+		supplier: DF.Link | None
+		use_batchwise_valuation: DF.Check
+	# end: auto-generated types
+
 	def autoname(self):
 		"""Generate random ID for batch if not specified"""
 
@@ -127,9 +157,7 @@ class Batch(Document):
 			dontmanage.throw(_("The selected item cannot have Batch"))
 
 	def set_batchwise_valuation(self):
-		from dontmanageerp.stock.stock_ledger import get_valuation_method
-
-		if self.is_new() and get_valuation_method(self.item) != "Moving Average":
+		if self.is_new():
 			self.use_batchwise_valuation = 1
 
 	def before_save(self):
@@ -165,7 +193,12 @@ class Batch(Document):
 
 @dontmanage.whitelist()
 def get_batch_qty(
-	batch_no=None, warehouse=None, item_code=None, posting_date=None, posting_time=None
+	batch_no=None,
+	warehouse=None,
+	item_code=None,
+	posting_date=None,
+	posting_time=None,
+	ignore_voucher_nos=None,
 ):
 	"""Returns batch actual qty if warehouse is passed,
 	        or returns dict of qty by warehouse if warehouse is None
@@ -176,47 +209,31 @@ def get_batch_qty(
 	:param warehouse: Optional - give qty for this warehouse
 	:param item_code: Optional - give qty for this item"""
 
-	out = 0
-	if batch_no and warehouse:
-		cond = ""
-		if posting_date and posting_time:
-			cond = " and timestamp(posting_date, posting_time) <= timestamp('{0}', '{1}')".format(
-				posting_date, posting_time
-			)
+	from dontmanageerp.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+		get_auto_batch_nos,
+	)
 
-		out = float(
-			dontmanage.db.sql(
-				"""select sum(actual_qty)
-			from `tabStock Ledger Entry`
-			where is_cancelled = 0 and warehouse=%s and batch_no=%s {0}""".format(
-					cond
-				),
-				(warehouse, batch_no),
-			)[0][0]
-			or 0
-		)
+	batchwise_qty = defaultdict(float)
+	kwargs = dontmanage._dict(
+		{
+			"item_code": item_code,
+			"warehouse": warehouse,
+			"posting_date": posting_date,
+			"posting_time": posting_time,
+			"batch_no": batch_no,
+			"ignore_voucher_nos": ignore_voucher_nos,
+		}
+	)
 
-	if batch_no and not warehouse:
-		out = dontmanage.db.sql(
-			"""select warehouse, sum(actual_qty) as qty
-			from `tabStock Ledger Entry`
-			where is_cancelled = 0 and batch_no=%s
-			group by warehouse""",
-			batch_no,
-			as_dict=1,
-		)
+	batches = get_auto_batch_nos(kwargs)
 
-	if not batch_no and item_code and warehouse:
-		out = dontmanage.db.sql(
-			"""select batch_no, sum(actual_qty) as qty
-			from `tabStock Ledger Entry`
-			where is_cancelled = 0 and item_code = %s and warehouse=%s
-			group by batch_no""",
-			(item_code, warehouse),
-			as_dict=1,
-		)
+	if not (batch_no and warehouse):
+		return batches
 
-	return out
+	for batch in batches:
+		batchwise_qty[batch.get("batch_no")] += batch.get("qty")
+
+	return batchwise_qty[batch_no]
 
 
 @dontmanage.whitelist()
@@ -231,14 +248,31 @@ def get_batches_by_oldest(item_code, warehouse):
 
 
 @dontmanage.whitelist()
-def split_batch(batch_no, item_code, warehouse, qty, new_batch_id=None):
+def split_batch(
+	batch_no: str, item_code: str, warehouse: str, qty: float, new_batch_id: str | None = None
+):
 	"""Split the batch into a new batch"""
 	batch = dontmanage.get_doc(dict(doctype="Batch", item=item_code, batch_id=new_batch_id)).insert()
+	qty = flt(qty)
 
-	company = dontmanage.db.get_value(
-		"Stock Ledger Entry",
-		dict(item_code=item_code, batch_no=batch_no, warehouse=warehouse),
-		["company"],
+	company = dontmanage.db.get_value("Warehouse", warehouse, "company")
+
+	from_bundle_id = make_batch_bundle(
+		item_code=item_code,
+		warehouse=warehouse,
+		batches=dontmanage._dict({batch_no: qty}),
+		company=company,
+		type_of_transaction="Outward",
+		qty=qty,
+	)
+
+	to_bundle_id = make_batch_bundle(
+		item_code=item_code,
+		warehouse=warehouse,
+		batches=dontmanage._dict({batch.name: qty}),
+		company=company,
+		type_of_transaction="Inward",
+		qty=qty,
 	)
 
 	stock_entry = dontmanage.get_doc(
@@ -247,8 +281,12 @@ def split_batch(batch_no, item_code, warehouse, qty, new_batch_id=None):
 			purpose="Repack",
 			company=company,
 			items=[
-				dict(item_code=item_code, qty=float(qty or 0), s_warehouse=warehouse, batch_no=batch_no),
-				dict(item_code=item_code, qty=float(qty or 0), t_warehouse=warehouse, batch_no=batch.name),
+				dict(
+					item_code=item_code, qty=qty, s_warehouse=warehouse, serial_and_batch_bundle=from_bundle_id
+				),
+				dict(
+					item_code=item_code, qty=qty, t_warehouse=warehouse, serial_and_batch_bundle=to_bundle_id
+				),
 			],
 		)
 	)
@@ -259,91 +297,79 @@ def split_batch(batch_no, item_code, warehouse, qty, new_batch_id=None):
 	return batch.name
 
 
-def set_batch_nos(doc, warehouse_field, throw=False, child_table="items"):
-	"""Automatically select `batch_no` for outgoing items in item table"""
-	for d in doc.get(child_table):
-		qty = d.get("stock_qty") or d.get("transfer_qty") or d.get("qty") or 0
-		warehouse = d.get(warehouse_field, None)
-		if warehouse and qty > 0 and dontmanage.db.get_value("Item", d.item_code, "has_batch_no"):
-			if not d.batch_no:
-				d.batch_no = get_batch_no(d.item_code, warehouse, qty, throw, d.serial_no)
-			else:
-				batch_qty = get_batch_qty(batch_no=d.batch_no, warehouse=warehouse)
-				if flt(batch_qty, d.precision("qty")) < flt(qty, d.precision("qty")):
-					dontmanage.throw(
-						_(
-							"Row #{0}: The batch {1} has only {2} qty. Please select another batch which has {3} qty available or split the row into multiple rows, to deliver/issue from multiple batches"
-						).format(d.idx, d.batch_no, batch_qty, qty)
-					)
+def make_batch_bundle(
+	item_code: str,
+	warehouse: str,
+	batches: dict[str, float],
+	company: str,
+	type_of_transaction: str,
+	qty: float,
+):
+	from dontmanage.utils import nowtime, today
 
+	from dontmanageerp.stock.serial_batch_bundle import SerialBatchCreation
 
-@dontmanage.whitelist()
-def get_batch_no(item_code, warehouse, qty=1, throw=False, serial_no=None):
-	"""
-	Get batch number using First Expiring First Out method.
-	:param item_code: `item_code` of Item Document
-	:param warehouse: name of Warehouse to check
-	:param qty: quantity of Items
-	:return: String represent batch number of batch with sufficient quantity else an empty String
-	"""
-
-	batch_no = None
-	batches = get_batches(item_code, warehouse, qty, throw, serial_no)
-
-	for batch in batches:
-		if flt(qty) <= flt(batch.qty):
-			batch_no = batch.batch_id
-			break
-
-	if not batch_no:
-		dontmanage.msgprint(
-			_(
-				"Please select a Batch for Item {0}. Unable to find a single batch that fulfills this requirement"
-			).format(dontmanage.bold(item_code))
+	return (
+		SerialBatchCreation(
+			{
+				"item_code": item_code,
+				"warehouse": warehouse,
+				"posting_date": today(),
+				"posting_time": nowtime(),
+				"voucher_type": "Stock Entry",
+				"qty": qty,
+				"type_of_transaction": type_of_transaction,
+				"company": company,
+				"batches": batches,
+				"do_not_submit": True,
+			}
 		)
-		if throw:
-			raise UnableToSelectBatchError
-
-	return batch_no
+		.make_serial_and_batch_bundle()
+		.name
+	)
 
 
 def get_batches(item_code, warehouse, qty=1, throw=False, serial_no=None):
 	from dontmanageerp.stock.doctype.serial_no.serial_no import get_serial_nos
 
-	cond = ""
+	batch = dontmanage.qb.DocType("Batch")
+	sle = dontmanage.qb.DocType("Stock Ledger Entry")
+
+	query = (
+		dontmanage.qb.from_(batch)
+		.join(sle)
+		.on(batch.batch_id == sle.batch_no)
+		.select(
+			batch.batch_id,
+			Sum(sle.actual_qty).as_("qty"),
+		)
+		.where(
+			(sle.item_code == item_code)
+			& (sle.warehouse == warehouse)
+			& (sle.is_cancelled == 0)
+			& ((batch.expiry_date >= CurDate()) | (batch.expiry_date.isnull()))
+		)
+		.groupby(batch.batch_id)
+		.orderby(batch.expiry_date, batch.creation)
+	)
+
 	if serial_no and dontmanage.get_cached_value("Item", item_code, "has_batch_no"):
 		serial_nos = get_serial_nos(serial_no)
-		batch = dontmanage.get_all(
+		batches = dontmanage.get_all(
 			"Serial No",
 			fields=["distinct batch_no"],
 			filters={"item_code": item_code, "warehouse": warehouse, "name": ("in", serial_nos)},
 		)
 
-		if not batch:
+		if not batches:
 			validate_serial_no_with_batch(serial_nos, item_code)
 
-		if batch and len(batch) > 1:
+		if batches and len(batches) > 1:
 			return []
 
-		cond = " and `tabBatch`.name = %s" % (dontmanage.db.escape(batch[0].batch_no))
+		query = query.where(batch.name == batches[0].batch_no)
 
-	return dontmanage.db.sql(
-		"""
-		select batch_id, sum(`tabStock Ledger Entry`.actual_qty) as qty
-		from `tabBatch`
-			join `tabStock Ledger Entry` ignore index (item_code, warehouse)
-				on (`tabBatch`.batch_id = `tabStock Ledger Entry`.batch_no )
-		where `tabStock Ledger Entry`.item_code = %s and `tabStock Ledger Entry`.warehouse = %s
-			and `tabStock Ledger Entry`.is_cancelled = 0
-			and (`tabBatch`.expiry_date >= CURRENT_DATE or `tabBatch`.expiry_date IS NULL) {0}
-		group by batch_id
-		order by `tabBatch`.expiry_date ASC, `tabBatch`.creation ASC
-	""".format(
-			cond
-		),
-		(item_code, warehouse),
-		as_dict=True,
-	)
+	return query.run(as_dict=True)
 
 
 def validate_serial_no_with_batch(serial_nos, item_code):
@@ -360,10 +386,10 @@ def validate_serial_no_with_batch(serial_nos, item_code):
 	dontmanage.throw(_("There is no batch found against the {0}: {1}").format(message, serial_no_link))
 
 
-def make_batch(args):
-	if dontmanage.db.get_value("Item", args.item, "has_batch_no"):
-		args.doctype = "Batch"
-		dontmanage.get_doc(args).insert().name
+def make_batch(kwargs):
+	if dontmanage.db.get_value("Item", kwargs.item, "has_batch_no"):
+		kwargs.doctype = "Batch"
+		return dontmanage.get_doc(kwargs).insert().name
 
 
 @dontmanage.whitelist()
@@ -375,7 +401,7 @@ def get_pos_reserved_batch_qty(filters):
 
 	p = dontmanage.qb.DocType("POS Invoice").as_("p")
 	item = dontmanage.qb.DocType("POS Invoice Item").as_("item")
-	sum_qty = dontmanage.query_builder.functions.Sum(item.qty).as_("qty")
+	sum_qty = dontmanage.query_builder.functions.Sum(item.stock_qty).as_("qty")
 
 	reserved_batch_qty = (
 		dontmanage.qb.from_(p)
@@ -396,3 +422,28 @@ def get_pos_reserved_batch_qty(filters):
 
 	flt_reserved_batch_qty = flt(reserved_batch_qty[0][0])
 	return flt_reserved_batch_qty
+
+
+def get_available_batches(kwargs):
+	from dontmanageerp.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+		get_auto_batch_nos,
+	)
+
+	batchwise_qty = defaultdict(float)
+
+	batches = get_auto_batch_nos(kwargs)
+	for batch in batches:
+		batchwise_qty[batch.get("batch_no")] += batch.get("qty")
+
+	return batchwise_qty
+
+
+def get_batch_no(bundle_id):
+	from dontmanageerp.stock.serial_batch_bundle import get_batch_nos
+
+	batches = defaultdict(float)
+
+	for batch_id, d in get_batch_nos(bundle_id).items():
+		batches[batch_id] += abs(d.get("qty"))
+
+	return batches

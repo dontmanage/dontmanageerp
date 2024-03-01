@@ -9,6 +9,23 @@ from dontmanage.utils import add_months, flt
 
 
 class MonthlyDistribution(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.monthly_distribution_percentage.monthly_distribution_percentage import (
+			MonthlyDistributionPercentage,
+		)
+
+		distribution_id: DF.Data
+		fiscal_year: DF.Link | None
+		percentages: DF.Table[MonthlyDistributionPercentage]
+	# end: auto-generated types
+
 	@dontmanage.whitelist()
 	def get_months(self):
 		month_list = [

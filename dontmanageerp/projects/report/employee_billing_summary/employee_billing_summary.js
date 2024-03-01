@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Employee Billing Summary"] = {
 	"filters": [
@@ -24,6 +24,11 @@ dontmanage.query_reports["Employee Billing Summary"] = {
 			fieldtype: "Date",
 			default: dontmanage.datetime.add_days(dontmanage.datetime.month_start(), -1),
 			reqd: 1
+		},
+		{
+			fieldname:"include_draft_timesheets",
+			label: __("Include Timesheets in Draft Status"),
+			fieldtype: "Check",
 		},
 	]
 }

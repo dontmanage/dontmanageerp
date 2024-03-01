@@ -18,6 +18,7 @@ dontmanage.ui.form.on("Company", {
 		});
 	},
 	setup: function(frm) {
+		frm.__rename_queue = "long";
 		dontmanageerp.company.setup_queries(frm);
 
 		frm.set_query("parent_company", function() {
@@ -39,7 +40,7 @@ dontmanage.ui.form.on("Company", {
 				filters:{
 					'warehouse_type' : 'Transit',
 					'is_group': 0,
-					'company': frm.doc.company
+					'company': frm.doc.company_name
 				}
 			};
 		});
@@ -80,8 +81,6 @@ dontmanage.ui.form.on("Company", {
 			frm.doc.abbr && frm.set_df_property("abbr", "read_only", 1);
 			disbale_coa_fields(frm);
 			dontmanage.contacts.render_address_and_contact(frm);
-
-			dontmanage.dynamic_link = {doc: frm.doc, fieldname: 'name', doctype: 'Company'}
 
 			if (dontmanage.perm.has_perm("Cost Center", 0, 'read')) {
 				frm.add_custom_button(__('Cost Centers'), function() {
@@ -141,38 +140,48 @@ dontmanage.ui.form.on("Company", {
 	},
 
 	delete_company_transactions: function(frm) {
-		dontmanage.verify_password(function() {
-			var d = dontmanage.prompt({
-				fieldtype:"Data",
-				fieldname: "company_name",
-				label: __("Please enter the company name to confirm"),
-				reqd: 1,
-				description: __("Please make sure you really want to delete all the transactions for this company. Your master data will remain as it is. This action cannot be undone.")
+		dontmanage.call({
+			method: "dontmanageerp.setup.doctype.company.company.is_deletion_job_running",
+			args: {
+				company: frm.doc.name
 			},
-			function(data) {
-				if(data.company_name !== frm.doc.name) {
-					dontmanage.msgprint(__("Company name not same"));
-					return;
+			freeze: true,
+			callback: function(r) {
+				if(!r.exc) {
+					dontmanage.verify_password(function() {
+						var d = dontmanage.prompt({
+							fieldtype:"Data",
+							fieldname: "company_name",
+							label: __("Please enter the company name to confirm"),
+							reqd: 1,
+							description: __("Please make sure you really want to delete all the transactions for this company. Your master data will remain as it is. This action cannot be undone.")
+						},
+								      function(data) {
+									      if(data.company_name !== frm.doc.name) {
+										      dontmanage.msgprint(__("Company name not same"));
+										      return;
+									      }
+									      dontmanage.call({
+										      method: "dontmanageerp.setup.doctype.company.company.create_transaction_deletion_request",
+										      args: {
+											      company: data.company_name
+										      },
+										      freeze: true,
+										      callback: function(r, rt) { },
+										      onerror: function() {
+											      dontmanage.msgprint(__("Wrong Password"));
+										      }
+									      });
+								      },
+								      __("Delete all the Transactions for this Company"), __("Delete")
+								     );
+						d.get_primary_btn().addClass("btn-danger");
+					});
 				}
-				dontmanage.call({
-					method: "dontmanageerp.setup.doctype.company.company.create_transaction_deletion_request",
-					args: {
-						company: data.company_name
-					},
-					freeze: true,
-					callback: function(r, rt) {
-						if(!r.exc)
-							dontmanage.msgprint(__("Successfully deleted all transactions related to this company!"));
-					},
-					onerror: function() {
-						dontmanage.msgprint(__("Wrong Password"));
-					}
-				});
+
 			},
-			__("Delete all the Transactions for this Company"), __("Delete")
-			);
-			d.get_primary_btn().addClass("btn-danger");
 		});
+
 	}
 });
 
@@ -201,8 +210,8 @@ dontmanageerp.company.setup_queries = function(frm) {
 	$.each([
 		["default_bank_account", {"account_type": "Bank"}],
 		["default_cash_account", {"account_type": "Cash"}],
-		["default_receivable_account", {"account_type": "Receivable"}],
-		["default_payable_account", {"account_type": "Payable"}],
+		["default_receivable_account", { "root_type": "Asset", "account_type": "Receivable" }],
+		["default_payable_account", { "root_type": "Liability", "account_type": "Payable" }],
 		["default_expense_account", {"root_type": "Expense"}],
 		["default_income_account", {"root_type": "Income"}],
 		["round_off_account", {"root_type": "Expense"}],
@@ -226,7 +235,9 @@ dontmanageerp.company.setup_queries = function(frm) {
 		["capital_work_in_progress_account", {"account_type": "Capital Work in Progress"}],
 		["asset_received_but_not_billed", {"account_type": "Asset Received But Not Billed"}],
 		["unrealized_profit_loss_account", {"root_type": ["in", ["Liability", "Asset"]]}],
-		["default_provisional_account", {"root_type": ["in", ["Liability", "Asset"]]}]
+		["default_provisional_account", {"root_type": ["in", ["Liability", "Asset"]]}],
+		["default_advance_received_account", {"root_type": "Liability", "account_type": "Receivable"}],
+		["default_advance_paid_account", {"root_type": "Asset", "account_type": "Payable"}],
 	], function(i, v) {
 		dontmanageerp.company.set_custom_query(frm, v);
 	});

@@ -4,8 +4,6 @@
 import dontmanage
 from dontmanage import _
 
-from dontmanageerp.e_commerce.doctype.e_commerce_settings.e_commerce_settings import show_attachments
-
 
 def get_context(context):
 	context.no_cache = 1
@@ -14,16 +12,11 @@ def get_context(context):
 	if hasattr(context.doc, "set_indicator"):
 		context.doc.set_indicator()
 
-	if show_attachments():
-		context.attachments = get_attachments(dontmanage.form_dict.doctype, dontmanage.form_dict.name)
-
 	context.parents = dontmanage.form_dict.parents
 	context.title = dontmanage.form_dict.name
 	context.payment_ref = dontmanage.db.get_value(
 		"Payment Request", {"reference_name": dontmanage.form_dict.name}, "name"
 	)
-
-	context.enabled_checkout = dontmanage.get_doc("E Commerce Settings").enable_checkout
 
 	default_print_format = dontmanage.db.get_value(
 		"Property Setter",
@@ -55,7 +48,10 @@ def get_context(context):
 			)
 			context.available_loyalty_points = int(loyalty_program_details.get("loyalty_points"))
 
-	context.show_pay_button = dontmanage.db.get_single_value("Buying Settings", "show_pay_button")
+	context.show_pay_button = (
+		"payments" in dontmanage.get_installed_apps()
+		and dontmanage.db.get_single_value("Buying Settings", "show_pay_button")
+	)
 	context.show_make_pi_button = False
 	if context.doc.get("supplier"):
 		# show Make Purchase Invoice button based on permission

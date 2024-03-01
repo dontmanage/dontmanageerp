@@ -5,13 +5,16 @@
 import json
 
 import dontmanage
-from dontmanage import _, throw
+from dontmanage import _, bold, qb, throw
 from dontmanage.model.workflow import get_workflow_name, is_transition_condition_satisfied
+from dontmanage.query_builder import Criterion
+from dontmanage.query_builder.custom import ConstantColumn
 from dontmanage.query_builder.functions import Abs, Sum
 from dontmanage.utils import (
 	add_days,
 	add_months,
 	cint,
+	comma_and,
 	flt,
 	fmt_money,
 	formatdate,
@@ -19,25 +22,33 @@ from dontmanage.utils import (
 	get_link_to_form,
 	getdate,
 	nowdate,
+	parse_json,
 	today,
 )
 
 import dontmanageerp
 from dontmanageerp.accounts.doctype.accounting_dimension.accounting_dimension import (
 	get_accounting_dimensions,
+	get_dimensions,
 )
 from dontmanageerp.accounts.doctype.pricing_rule.utils import (
 	apply_pricing_rule_for_free_items,
 	apply_pricing_rule_on_transaction,
 	get_applied_pricing_rules,
 )
+from dontmanageerp.accounts.general_ledger import get_round_off_account_and_cost_center
 from dontmanageerp.accounts.party import (
 	get_party_account,
 	get_party_account_currency,
 	get_party_gle_currency,
 	validate_party_frozen_disabled,
 )
-from dontmanageerp.accounts.utils import get_account_currency, get_fiscal_years, validate_fiscal_year
+from dontmanageerp.accounts.utils import (
+	create_gain_loss_journal,
+	get_account_currency,
+	get_fiscal_years,
+	validate_fiscal_year,
+)
 from dontmanageerp.buying.utils import update_last_purchase_rate
 from dontmanageerp.controllers.print_settings import (
 	set_print_templates_for_item_table,
@@ -55,10 +66,15 @@ from dontmanageerp.stock.get_item_details import (
 	get_item_tax_map,
 	get_item_warehouse,
 )
+from dontmanageerp.utilities.regional import temporary_flag
 from dontmanageerp.utilities.transaction_base import TransactionBase
 
 
 class AccountMissingError(dontmanage.ValidationError):
+	pass
+
+
+class InvalidQtyError(dontmanage.ValidationError):
 	pass
 
 
@@ -116,6 +132,17 @@ class AccountsController(TransactionBase):
 			if self.doctype in relevant_docs:
 				self.set_payment_schedule()
 
+	def remove_bundle_for_non_stock_invoices(self):
+		has_sabb = False
+		if self.doctype in ("Sales Invoice", "Purchase Invoice") and not self.update_stock:
+			for item in self.get("items"):
+				if item.serial_and_batch_bundle:
+					item.serial_and_batch_bundle = None
+					has_sabb = True
+
+		if has_sabb:
+			self.remove_serial_and_batch_bundle()
+
 	def ensure_supplier_is_not_blocked(self):
 		is_supplier_payment = self.doctype == "Payment Entry" and self.party_type == "Supplier"
 		is_buying_invoice = self.doctype in ["Purchase Invoice", "Purchase Order"]
@@ -143,6 +170,9 @@ class AccountsController(TransactionBase):
 		if self.get("_action") and self._action != "update_after_submit":
 			self.set_missing_values(for_validate=True)
 
+		if self.get("_action") == "submit":
+			self.remove_bundle_for_non_stock_invoices()
+
 		self.ensure_supplier_is_not_blocked()
 
 		self.validate_date_with_fiscal_year()
@@ -153,6 +183,7 @@ class AccountsController(TransactionBase):
 		self.disable_pricing_rule_on_internal_transfer()
 		self.disable_tax_included_prices_for_internal_transfer()
 		self.set_incoming_rate()
+		self.init_internal_values()
 
 		if self.meta.get_field("currency"):
 			self.calculate_taxes_and_totals()
@@ -161,7 +192,6 @@ class AccountsController(TransactionBase):
 				self.validate_value("base_grand_total", ">=", 0)
 
 			validate_return(self)
-			self.set_total_in_words()
 
 		self.validate_all_documents_schedule()
 
@@ -172,8 +202,33 @@ class AccountsController(TransactionBase):
 		self.validate_party()
 		self.validate_currency()
 		self.validate_party_account_currency()
+		self.validate_return_against_account()
 
 		if self.doctype in ["Purchase Invoice", "Sales Invoice"]:
+			if invalid_advances := [
+				x for x in self.advances if not x.reference_type or not x.reference_name
+			]:
+				dontmanage.throw(
+					_(
+						"Rows: {0} in {1} section are Invalid. Reference Name should point to a valid Payment Entry or Journal Entry."
+					).format(
+						dontmanage.bold(comma_and([x.idx for x in invalid_advances])), dontmanage.bold(_("Advance Payments"))
+					)
+				)
+
+			if self.get("is_return") and self.get("return_against") and not self.get("is_pos"):
+				# if self.get("is_return") and self.get("return_against"):
+				document_type = "Credit Note" if self.doctype == "Sales Invoice" else "Debit Note"
+				dontmanage.msgprint(
+					_(
+						"{0} will be treated as a standalone {0}. Post creation use {1} tool to reconcile against {2}."
+					).format(
+						document_type,
+						get_link_to_form("Payment Reconciliation", "Payment Reconciliation"),
+						get_link_to_form(self.doctype, self.get("return_against")),
+					)
+				)
+
 			pos_check_field = "is_pos" if self.doctype == "Sales Invoice" else "is_paid"
 			if cint(self.allocate_advances_automatically) and not cint(self.get(pos_check_field)):
 				self.set_advances()
@@ -193,28 +248,110 @@ class AccountsController(TransactionBase):
 			# apply tax withholding only if checked and applicable
 			self.set_tax_withholding()
 
-		validate_regional(self)
-
-		validate_einvoice_fields(self)
+		with temporary_flag("company", self.company):
+			validate_regional(self)
+			validate_einvoice_fields(self)
 
 		if self.doctype != "Material Request" and not self.ignore_pricing_rule:
 			apply_pricing_rule_on_transaction(self)
 
+		self.set_total_in_words()
+		self.set_default_letter_head()
+
+	def set_default_letter_head(self):
+		if hasattr(self, "letter_head") and not self.letter_head:
+			self.letter_head = dontmanage.db.get_value("Company", self.company, "default_letter_head")
+
+	def init_internal_values(self):
+		# init all the internal values as 0 on sa
+		if self.docstatus.is_draft():
+			# TODO: Add all such pending values here
+			fields = ["billed_amt", "delivered_qty"]
+			for item in self.get("items"):
+				for field in fields:
+					if hasattr(item, field):
+						item.set(field, 0)
+
 	def before_cancel(self):
 		validate_einvoice_fields(self)
 
+	def _remove_references_in_unreconcile(self):
+		upe = dontmanage.qb.DocType("Unreconcile Payment Entries")
+		rows = (
+			dontmanage.qb.from_(upe)
+			.select(upe.name, upe.parent)
+			.where((upe.reference_doctype == self.doctype) & (upe.reference_name == self.name))
+			.run(as_dict=True)
+		)
+
+		if rows:
+			references_map = dontmanage._dict()
+			for x in rows:
+				references_map.setdefault(x.parent, []).append(x.name)
+
+			for doc, rows in references_map.items():
+				unreconcile_doc = dontmanage.get_doc("Unreconcile Payment", doc)
+				for row in rows:
+					unreconcile_doc.remove(unreconcile_doc.get("allocations", {"name": row})[0])
+
+				unreconcile_doc.flags.ignore_validate_update_after_submit = True
+				unreconcile_doc.flags.ignore_links = True
+				unreconcile_doc.save(ignore_permissions=True)
+
+		# delete docs upon parent doc deletion
+		unreconcile_docs = dontmanage.db.get_all("Unreconcile Payment", filters={"voucher_no": self.name})
+		for x in unreconcile_docs:
+			_doc = dontmanage.get_doc("Unreconcile Payment", x.name)
+			if _doc.docstatus == 1:
+				_doc.cancel()
+			_doc.delete()
+
+	def _remove_references_in_repost_doctypes(self):
+		repost_doctypes = ["Repost Payment Ledger Items", "Repost Accounting Ledger Items"]
+
+		for _doctype in repost_doctypes:
+			dt = dontmanage.qb.DocType(_doctype)
+			rows = (
+				dontmanage.qb.from_(dt)
+				.select(dt.name, dt.parent, dt.parenttype)
+				.where((dt.voucher_type == self.doctype) & (dt.voucher_no == self.name))
+				.run(as_dict=True)
+			)
+
+			if rows:
+				references_map = dontmanage._dict()
+				for x in rows:
+					references_map.setdefault((x.parenttype, x.parent), []).append(x.name)
+
+				for doc, rows in references_map.items():
+					repost_doc = dontmanage.get_doc(doc[0], doc[1])
+
+					for row in rows:
+						if _doctype == "Repost Payment Ledger Items":
+							repost_doc.remove(repost_doc.get("repost_vouchers", {"name": row})[0])
+						else:
+							repost_doc.remove(repost_doc.get("vouchers", {"name": row})[0])
+
+					repost_doc.flags.ignore_validate_update_after_submit = True
+					repost_doc.flags.ignore_links = True
+					repost_doc.save(ignore_permissions=True)
+
 	def on_trash(self):
-		# delete references in 'Repost Payment Ledger'
-		rpi = dontmanage.qb.DocType("Repost Payment Ledger Items")
-		dontmanage.qb.from_(rpi).delete().where(
-			(rpi.voucher_type == self.doctype) & (rpi.voucher_no == self.name)
-		).run()
+		self._remove_references_in_repost_doctypes()
+		self._remove_references_in_unreconcile()
+		self.remove_serial_and_batch_bundle()
 
 		# delete sl and gl entries on deletion of transaction
 		if dontmanage.db.get_single_value("Accounts Settings", "delete_linked_ledger_entries"):
 			ple = dontmanage.qb.DocType("Payment Ledger Entry")
 			dontmanage.qb.from_(ple).delete().where(
 				(ple.voucher_type == self.doctype) & (ple.voucher_no == self.name)
+				| (
+					(ple.against_voucher_type == self.doctype)
+					& (ple.against_voucher_no == self.name)
+					& ple.delinked
+					== 1
+				)
 			).run()
 			dontmanage.db.sql(
 				"delete from `tabGL Entry` where voucher_type=%s and voucher_no=%s", (self.doctype, self.name)
@@ -223,6 +360,29 @@ class AccountsController(TransactionBase):
 				"delete from `tabStock Ledger Entry` where voucher_type=%s and voucher_no=%s",
 				(self.doctype, self.name),
 			)
+
+	def remove_serial_and_batch_bundle(self):
+		bundles = dontmanage.get_all(
+			"Serial and Batch Bundle",
+			filters={"voucher_type": self.doctype, "voucher_no": self.name, "docstatus": ("!=", 1)},
+		)
+
+		for bundle in bundles:
+			dontmanage.delete_doc("Serial and Batch Bundle", bundle.name)
+
+	def validate_return_against_account(self):
+		if (
+			self.doctype in ["Sales Invoice", "Purchase Invoice"] and self.is_return and self.return_against
+		):
+			cr_dr_account_field = "debit_to" if self.doctype == "Sales Invoice" else "credit_to"
+			cr_dr_account_label = "Debit To" if self.doctype == "Sales Invoice" else "Credit To"
+			cr_dr_account = self.get(cr_dr_account_field)
+			if dontmanage.get_value(self.doctype, self.return_against, cr_dr_account_field) != cr_dr_account:
+				dontmanage.throw(
+					_("'{0}' account: '{1}' should match the Return Against Invoice").format(
+						dontmanage.bold(cr_dr_account_label), dontmanage.bold(cr_dr_account)
+					)
+				)
 
 	def validate_deferred_income_expense_account(self):
 		field_map = {
@@ -273,8 +433,8 @@ class AccountsController(TransactionBase):
 		self.validate_payment_schedule_dates()
 		self.set_due_date()
 		self.set_payment_schedule()
-		self.validate_payment_schedule_amount()
 		if not self.get("ignore_default_payment_terms_template"):
+			self.validate_payment_schedule_amount()
 			self.validate_due_date()
 		self.validate_advance_entries()
 
@@ -392,6 +552,9 @@ class AccountsController(TransactionBase):
 				)
 
 	def validate_inter_company_reference(self):
+		if self.get("is_return"):
+			return
+
 		if self.doctype not in ("Purchase Invoice", "Purchase Receipt"):
 			return
 
@@ -404,6 +567,15 @@ class AccountsController(TransactionBase):
 				msg = _("Internal Sale or Delivery Reference missing.")
 				msg += _("Please create purchase from internal sale or delivery document itself")
 				dontmanage.throw(msg, title=_("Internal Sales Reference Missing"))
+
+			label = "Delivery Note Item" if self.doctype == "Purchase Receipt" else "Sales Invoice Item"
+
+			field = dontmanage.scrub(label)
+
+			for row in self.get("items"):
+				if not row.get(field):
+					msg = f"At Row {row.idx}: The field {bold(label)} is mandatory for internal transfer"
+					dontmanage.throw(_(msg), title=_("Internal Transfer Reference Missing"))
 
 	def disable_pricing_rule_on_internal_transfer(self):
 		if not self.get("ignore_pricing_rule") and self.is_internal_transfer():
@@ -440,18 +612,12 @@ class AccountsController(TransactionBase):
 			validate_due_date(
 				self.posting_date,
 				self.due_date,
-				"Customer",
-				self.customer,
-				self.company,
 				self.payment_terms_template,
 			)
 		elif self.doctype == "Purchase Invoice":
 			validate_due_date(
 				self.bill_date or self.posting_date,
 				self.due_date,
-				"Supplier",
-				self.supplier,
-				self.company,
 				self.bill_date,
 				self.payment_terms_template,
 			)
@@ -493,6 +659,17 @@ class AccountsController(TransactionBase):
 					self.currency, self.company_currency, transaction_date, args
 				)
 
+			if (
+				self.currency
+				and buying_or_selling == "Buying"
+				and dontmanage.db.get_single_value("Buying Settings", "use_transaction_date_exchange_rate")
+				and self.doctype == "Purchase Invoice"
+			):
+				self.use_transaction_date_exchange_rate = True
+				self.conversion_rate = get_exchange_rate(
+					self.currency, self.company_currency, transaction_date, args
+				)
+
 	def set_missing_item_details(self, for_validate=False):
 		"""set missing item values"""
 		from dontmanageerp.stock.doctype.serial_no.serial_no import get_serial_nos
@@ -515,6 +692,7 @@ class AccountsController(TransactionBase):
 				parent_dict.update({"customer": parent_dict.get("party_name")})
 
 			self.pricing_rules = []
+
 			for item in self.get("items"):
 				if item.get("item_code"):
 					args = parent_dict.copy()
@@ -522,6 +700,7 @@ class AccountsController(TransactionBase):
 
 					args["doctype"] = self.doctype
 					args["name"] = self.name
+					args["child_doctype"] = item.doctype
 					args["child_docname"] = item.name
 					args["ignore_pricing_rule"] = (
 						self.ignore_pricing_rule if hasattr(self, "ignore_pricing_rule") else 0
@@ -533,7 +712,7 @@ class AccountsController(TransactionBase):
 					if self.get("is_subcontracted"):
 						args["is_subcontracted"] = self.is_subcontracted
 
-					ret = get_item_details(args, self, for_validate=True, overwrite_warehouse=False)
+					ret = get_item_details(args, self, for_validate=for_validate, overwrite_warehouse=False)
 
 					for fieldname, value in ret.items():
 						if item.meta.get_field(fieldname) and value is not None:
@@ -689,13 +868,46 @@ class AccountsController(TransactionBase):
 
 			self.extend("taxes", get_taxes_and_charges(tax_master_doctype, self.get("taxes_and_charges")))
 
+	def append_taxes_from_item_tax_template(self):
+		if not dontmanage.db.get_single_value("Accounts Settings", "add_taxes_from_item_tax_template"):
+			return
+
+		for row in self.items:
+			item_tax_rate = row.get("item_tax_rate")
+			if not item_tax_rate:
+				continue
+
+			if isinstance(item_tax_rate, str):
+				item_tax_rate = parse_json(item_tax_rate)
+
+			for account_head, rate in item_tax_rate.items():
+				row = self.get_tax_row(account_head)
+
+				if not row:
+					self.append(
+						"taxes",
+						{
+							"charge_type": "On Net Total",
+							"account_head": account_head,
+							"rate": 0,
+							"description": account_head,
+						},
+					)
+
+	def get_tax_row(self, account_head):
+		for row in self.taxes:
+			if row.account_head == account_head:
+				return row
+
 	def set_other_charges(self):
 		self.set("taxes", [])
 		self.set_taxes()
 
 	def validate_enabled_taxes_and_charges(self):
 		taxes_and_charges_doctype = self.meta.get_options("taxes_and_charges")
-		if dontmanage.get_cached_value(taxes_and_charges_doctype, self.taxes_and_charges, "disabled"):
+		if self.taxes_and_charges and dontmanage.get_cached_value(
+			taxes_and_charges_doctype, self.taxes_and_charges, "disabled"
+		):
 			dontmanage.throw(
 				_("{0} '{1}' is disabled").format(taxes_and_charges_doctype, self.taxes_and_charges)
 			)
@@ -742,8 +954,13 @@ class AccountsController(TransactionBase):
 				"party": None,
 				"project": self.get("project"),
 				"post_net_value": args.get("post_net_value"),
+				"voucher_detail_no": args.get("voucher_detail_no"),
+				"voucher_subtype": self.get_voucher_subtype(),
 			}
 		)
+
+		with temporary_flag("company", self.company):
+			update_gl_dict_with_regional_fields(self, gl_dict)
 
 		accounting_dimensions = get_accounting_dimensions()
 		dimension_dict = dontmanage._dict()
@@ -778,13 +995,64 @@ class AccountsController(TransactionBase):
 				gl_dict, account_currency, self.get("conversion_rate"), self.company_currency
 			)
 
+		# Update details in transaction currency
+		gl_dict.update(
+			{
+				"transaction_currency": self.get("currency") or self.company_currency,
+				"transaction_exchange_rate": self.get("conversion_rate", 1),
+				"debit_in_transaction_currency": self.get_value_in_transaction_currency(
+					account_currency, args, "debit"
+				),
+				"credit_in_transaction_currency": self.get_value_in_transaction_currency(
+					account_currency, args, "credit"
+				),
+			}
+		)
+
+		if not args.get("against_voucher_type") and self.get("against_voucher_type"):
+			gl_dict.update({"against_voucher_type": self.get("against_voucher_type")})
+
+		if not args.get("against_voucher") and self.get("against_voucher"):
+			gl_dict.update({"against_voucher": self.get("against_voucher")})
+
 		return gl_dict
 
+	def get_voucher_subtype(self):
+		voucher_subtypes = {
+			"Journal Entry": "voucher_type",
+			"Payment Entry": "payment_type",
+			"Stock Entry": "stock_entry_type",
+			"Asset Capitalization": "entry_type",
+		}
+		if self.doctype in voucher_subtypes:
+			return self.get(voucher_subtypes[self.doctype])
+		elif self.doctype == "Purchase Receipt" and self.is_return:
+			return "Purchase Return"
+		elif self.doctype == "Delivery Note" and self.is_return:
+			return "Sales Return"
+		elif (self.doctype == "Sales Invoice" and self.is_return) or self.doctype == "Purchase Invoice":
+			return "Credit Note"
+		elif (self.doctype == "Purchase Invoice" and self.is_return) or self.doctype == "Sales Invoice":
+			return "Debit Note"
+		return self.doctype
+
+	def get_value_in_transaction_currency(self, account_currency, args, field):
+		if account_currency == self.get("currency"):
+			return args.get(field + "_in_account_currency")
+		else:
+			return flt(args.get(field, 0) / self.get("conversion_rate", 1))
+
 	def validate_qty_is_not_zero(self):
-		if self.doctype != "Purchase Receipt":
-			for item in self.items:
-				if not item.qty:
-					dontmanage.throw(_("Item quantity can not be zero"))
+		if self.doctype == "Purchase Receipt":
+			return
+
+		for item in self.items:
+			if not flt(item.qty):
+				dontmanage.throw(
+					msg=_("Row #{0}: Item quantity cannot be zero").format(item.idx),
+					title=_("Invalid Quantity"),
+					exc=InvalidQtyError,
+				)
 
 	def validate_account_currency(self, account, account_currency=None):
 		valid_currency = [self.company_currency]
@@ -833,7 +1101,9 @@ class AccountsController(TransactionBase):
 	def set_advances(self):
 		"""Returns list of advances against Account, Party, Reference"""
 
-		res = self.get_advance_entries()
+		res = self.get_advance_entries(
+			include_unallocated=not cint(self.get("only_include_allocated_payments"))
+		)
 
 		self.set("advances", [])
 		advance_allocated = 0
@@ -842,7 +1112,6 @@ class AccountsController(TransactionBase):
 				amount = self.get("base_rounded_total") or self.base_grand_total
 			else:
 				amount = self.get("rounded_total") or self.grand_total
-
 			allocated_amount = min(amount - advance_allocated, d.amount)
 			advance_allocated += flt(allocated_amount)
 
@@ -856,24 +1125,30 @@ class AccountsController(TransactionBase):
 				"allocated_amount": allocated_amount,
 				"ref_exchange_rate": flt(d.exchange_rate),  # exchange_rate of advance entry
 			}
+			if d.get("paid_from"):
+				advance_row["account"] = d.paid_from
+			if d.get("paid_to"):
+				advance_row["account"] = d.paid_to
 
 			self.append("advances", advance_row)
 
 	def get_advance_entries(self, include_unallocated=True):
 		if self.doctype == "Sales Invoice":
-			party_account = self.debit_to
 			party_type = "Customer"
 			party = self.customer
 			amount_field = "credit_in_account_currency"
 			order_field = "sales_order"
 			order_doctype = "Sales Order"
 		else:
-			party_account = self.credit_to
 			party_type = "Supplier"
 			party = self.supplier
 			amount_field = "debit_in_account_currency"
 			order_field = "purchase_order"
 			order_doctype = "Purchase Order"
+
+		party_account = get_party_account(
+			party_type, party=party, company=self.company, include_advance=True
+		)
 
 		order_list = list(set(d.get(order_field) for d in self.get("items") if d.get(order_field)))
 
@@ -881,7 +1156,7 @@ class AccountsController(TransactionBase):
 			party_type, party, party_account, amount_field, order_doctype, order_list, include_unallocated
 		)
 
-		payment_entries = get_advance_payment_entries(
+		payment_entries = get_advance_payment_entries_for_regional(
 			party_type, party, party_account, order_doctype, order_list, include_unallocated
 		)
 
@@ -900,6 +1175,9 @@ class AccountsController(TransactionBase):
 				is_inclusive = 1
 
 		return is_inclusive
+
+	def should_show_taxes_as_table_in_print(self):
+		return cint(dontmanage.db.get_single_value("Accounts Settings", "show_taxes_as_table_in_print"))
 
 	def validate_advance_entries(self):
 		order_field = "sales_order" if self.doctype == "Sales Invoice" else "purchase_order"
@@ -939,67 +1217,214 @@ class AccountsController(TransactionBase):
 
 				d.exchange_gain_loss = difference
 
-	def make_exchange_gain_loss_gl_entries(self, gl_entries):
-		if self.get("doctype") in ["Purchase Invoice", "Sales Invoice"]:
-			for d in self.get("advances"):
-				if d.exchange_gain_loss:
-					is_purchase_invoice = self.get("doctype") == "Purchase Invoice"
-					party = self.supplier if is_purchase_invoice else self.customer
-					party_account = self.credit_to if is_purchase_invoice else self.debit_to
-					party_type = "Supplier" if is_purchase_invoice else "Customer"
+	def make_precision_loss_gl_entry(self, gl_entries):
+		round_off_account, round_off_cost_center = get_round_off_account_and_cost_center(
+			self.company, "Purchase Invoice", self.name, self.use_company_roundoff_cost_center
+		)
 
-					gain_loss_account = dontmanage.get_cached_value(
-						"Company", self.company, "exchange_gain_loss_account"
+		precision_loss = self.get("base_net_total") - flt(
+			self.get("net_total") * self.conversion_rate, self.precision("net_total")
+		)
+
+		credit_or_debit = "credit" if self.doctype == "Purchase Invoice" else "debit"
+		against = self.supplier if self.doctype == "Purchase Invoice" else self.customer
+
+		if precision_loss:
+			gl_entries.append(
+				self.get_gl_dict(
+					{
+						"account": round_off_account,
+						"against": against,
+						credit_or_debit: precision_loss,
+						"cost_center": round_off_cost_center
+						if self.use_company_roundoff_cost_center
+						else self.cost_center or round_off_cost_center,
+						"remarks": _("Net total calculation precision loss"),
+					}
+				)
+			)
+
+	def gain_loss_journal_already_booked(
+		self,
+		gain_loss_account,
+		exc_gain_loss,
+		ref2_dt,
+		ref2_dn,
+		ref2_detail_no,
+	) -> bool:
+		"""
+		Check if gain/loss is booked
+		"""
+		if res := dontmanage.db.get_all(
+			"Journal Entry Account",
+			filters={
+				"docstatus": 1,
+				"account": gain_loss_account,
+				"reference_type": ref2_dt,  # this will be Journal Entry
+				"reference_name": ref2_dn,
+				"reference_detail_no": ref2_detail_no,
+			},
+			pluck="parent",
+		):
+			# deduplicate
+			res = list({x for x in res})
+			if exc_vouchers := dontmanage.db.get_all(
+				"Journal Entry",
+				filters={"name": ["in", res], "voucher_type": "Exchange Gain Or Loss"},
+				fields=["voucher_type", "total_debit", "total_credit"],
+			):
+				booked_voucher = exc_vouchers[0]
+				if (
+					booked_voucher.total_debit == exc_gain_loss
+					and booked_voucher.total_credit == exc_gain_loss
+					and booked_voucher.voucher_type == "Exchange Gain Or Loss"
+				):
+					return True
+		return False
+
+	def make_exchange_gain_loss_journal(
+		self, args: dict = None, dimensions_dict: dict = None
+	) -> None:
+		"""
+		Make Exchange Gain/Loss journal for Invoices and Payments
+		"""
+		# Cancelling existing exchange gain/loss journals is handled during the `on_cancel` event.
+		# see accounts/utils.py:cancel_exchange_gain_loss_journal()
+		if self.docstatus == 1:
+			if self.get("doctype") == "Journal Entry":
+				# 'args' is populated with exchange gain/loss account and the amount to be booked.
+				# These are generated by Sales/Purchase Invoice during reconciliation and advance allocation.
+				# and below logic is only for such scenarios
+				if args:
+					for arg in args:
+						# Advance section uses `exchange_gain_loss` and reconciliation uses `difference_amount`
+						if (
+							arg.get("difference_amount", 0) != 0 or arg.get("exchange_gain_loss", 0) != 0
+						) and arg.get("difference_account"):
+
+							party_account = arg.get("account")
+							gain_loss_account = arg.get("difference_account")
+							difference_amount = arg.get("difference_amount") or arg.get("exchange_gain_loss")
+							if difference_amount > 0:
+								dr_or_cr = "debit" if arg.get("party_type") == "Customer" else "credit"
+							else:
+								dr_or_cr = "credit" if arg.get("party_type") == "Customer" else "debit"
+
+							reverse_dr_or_cr = "debit" if dr_or_cr == "credit" else "credit"
+
+							if not self.gain_loss_journal_already_booked(
+								gain_loss_account,
+								difference_amount,
+								self.doctype,
+								self.name,
+								arg.get("referenced_row"),
+							):
+								posting_date = dontmanage.db.get_value(arg.voucher_type, arg.voucher_no, "posting_date")
+								je = create_gain_loss_journal(
+									self.company,
+									posting_date,
+									arg.get("party_type"),
+									arg.get("party"),
+									party_account,
+									gain_loss_account,
+									difference_amount,
+									dr_or_cr,
+									reverse_dr_or_cr,
+									arg.get("against_voucher_type"),
+									arg.get("against_voucher"),
+									arg.get("idx"),
+									self.doctype,
+									self.name,
+									arg.get("referenced_row"),
+									arg.get("cost_center"),
+									dimensions_dict,
+								)
+								dontmanage.msgprint(
+									_("Exchange Gain/Loss amount has been booked through {0}").format(
+										get_link_to_form("Journal Entry", je)
+									)
+								)
+
+			if self.get("doctype") == "Payment Entry":
+				# For Payment Entry, exchange_gain_loss field in the `references` table is the trigger for journal creation
+				gain_loss_to_book = [x for x in self.references if x.exchange_gain_loss != 0]
+				booked = []
+				if gain_loss_to_book:
+					vtypes = [x.reference_doctype for x in gain_loss_to_book]
+					vnames = [x.reference_name for x in gain_loss_to_book]
+					je = qb.DocType("Journal Entry")
+					jea = qb.DocType("Journal Entry Account")
+					parents = (
+						qb.from_(jea)
+						.select(jea.parent)
+						.where(
+							(jea.reference_type == "Payment Entry")
+							& (jea.reference_name == self.name)
+							& (jea.docstatus == 1)
+						)
+						.run()
 					)
-					if not gain_loss_account:
-						dontmanage.throw(
-							_("Please set default Exchange Gain/Loss Account in Company {}").format(self.get("company"))
-						)
-					account_currency = get_account_currency(gain_loss_account)
-					if account_currency != self.company_currency:
-						dontmanage.throw(
-							_("Currency for {0} must be {1}").format(gain_loss_account, self.company_currency)
+
+					booked = []
+					if parents:
+						booked = (
+							qb.from_(je)
+							.inner_join(jea)
+							.on(je.name == jea.parent)
+							.select(jea.reference_type, jea.reference_name, jea.reference_detail_no)
+							.where(
+								(je.docstatus == 1)
+								& (je.name.isin(parents))
+								& (je.voucher_type == "Exchange Gain or Loss")
+							)
+							.run()
 						)
 
-					# for purchase
-					dr_or_cr = "debit" if d.exchange_gain_loss > 0 else "credit"
-					if not is_purchase_invoice:
-						# just reverse for sales?
-						dr_or_cr = "debit" if dr_or_cr == "credit" else "credit"
+				for d in gain_loss_to_book:
+					# Filter out References for which Gain/Loss is already booked
+					if d.exchange_gain_loss and (
+						(d.reference_doctype, d.reference_name, str(d.idx)) not in booked
+					):
+						if self.payment_type == "Receive":
+							party_account = self.paid_from
+						elif self.payment_type == "Pay":
+							party_account = self.paid_to
 
-					gl_entries.append(
-						self.get_gl_dict(
-							{
-								"account": gain_loss_account,
-								"account_currency": account_currency,
-								"against": party,
-								dr_or_cr + "_in_account_currency": abs(d.exchange_gain_loss),
-								dr_or_cr: abs(d.exchange_gain_loss),
-								"cost_center": self.cost_center or dontmanageerp.get_default_cost_center(self.company),
-								"project": self.project,
-							},
-							item=d,
+						dr_or_cr = "debit" if d.exchange_gain_loss > 0 else "credit"
+
+						if d.reference_doctype == "Purchase Invoice":
+							dr_or_cr = "debit" if dr_or_cr == "credit" else "credit"
+
+						reverse_dr_or_cr = "debit" if dr_or_cr == "credit" else "credit"
+
+						gain_loss_account = dontmanage.get_cached_value(
+							"Company", self.company, "exchange_gain_loss_account"
 						)
-					)
 
-					dr_or_cr = "debit" if dr_or_cr == "credit" else "credit"
-
-					gl_entries.append(
-						self.get_gl_dict(
-							{
-								"account": party_account,
-								"party_type": party_type,
-								"party": party,
-								"against": gain_loss_account,
-								dr_or_cr + "_in_account_currency": flt(abs(d.exchange_gain_loss) / self.conversion_rate),
-								dr_or_cr: abs(d.exchange_gain_loss),
-								"cost_center": self.cost_center,
-								"project": self.project,
-							},
-							self.party_account_currency,
-							item=self,
+						je = create_gain_loss_journal(
+							self.company,
+							self.posting_date,
+							self.party_type,
+							self.party,
+							party_account,
+							gain_loss_account,
+							d.exchange_gain_loss,
+							dr_or_cr,
+							reverse_dr_or_cr,
+							d.reference_doctype,
+							d.reference_name,
+							d.idx,
+							self.doctype,
+							self.name,
+							d.idx,
+							self.cost_center,
+							dimensions_dict,
 						)
-					)
+						dontmanage.msgprint(
+							_("Exchange Gain/Loss amount has been booked through {0}").format(
+								get_link_to_form("Journal Entry", je)
+							)
+						)
 
 	def update_against_document_in_jv(self):
 		"""
@@ -1058,12 +1483,49 @@ class AccountsController(TransactionBase):
 		if lst:
 			from dontmanageerp.accounts.utils import reconcile_against_document
 
-			reconcile_against_document(lst)
+			# pass dimension values to utility method
+			active_dimensions = get_dimensions()[0]
+			for x in lst:
+				for dim in active_dimensions:
+					if self.get(dim.fieldname):
+						x.update({dim.fieldname: self.get(dim.fieldname)})
+			reconcile_against_document(lst, active_dimensions=active_dimensions)
+
+	def cancel_system_generated_credit_debit_notes(self):
+		# Cancel 'Credit/Debit' Note Journal Entries, if found.
+		if self.doctype in ["Sales Invoice", "Purchase Invoice"]:
+			voucher_type = "Credit Note" if self.doctype == "Sales Invoice" else "Debit Note"
+			journals = dontmanage.db.get_all(
+				"Journal Entry",
+				filters={
+					"is_system_generated": 1,
+					"reference_type": self.doctype,
+					"reference_name": self.name,
+					"voucher_type": voucher_type,
+					"docstatus": 1,
+				},
+				pluck="name",
+			)
+			for x in journals:
+				dontmanage.get_doc("Journal Entry", x).cancel()
 
 	def on_cancel(self):
-		from dontmanageerp.accounts.utils import unlink_ref_doc_from_payment_entries
+		from dontmanageerp.accounts.doctype.bank_transaction.bank_transaction import (
+			remove_from_bank_transaction,
+		)
+		from dontmanageerp.accounts.utils import (
+			cancel_exchange_gain_loss_journal,
+			unlink_ref_doc_from_payment_entries,
+		)
 
-		if self.doctype in ["Sales Invoice", "Purchase Invoice"]:
+		remove_from_bank_transaction(self.doctype, self.name)
+
+		if self.doctype in ["Sales Invoice", "Purchase Invoice", "Payment Entry", "Journal Entry"]:
+			self.cancel_system_generated_credit_debit_notes()
+
+			# Cancel Exchange Gain/Loss Journal before unlinking
+			cancel_exchange_gain_loss_journal(self)
+
 			if dontmanage.db.get_single_value("Accounts Settings", "unlink_payment_on_cancellation_of_invoice"):
 				unlink_ref_doc_from_payment_entries(self)
 
@@ -1225,14 +1687,14 @@ class AccountsController(TransactionBase):
 					{
 						"account": self.additional_discount_account,
 						"against": supplier_or_customer,
-						dr_or_cr: self.discount_amount,
-						"cost_center": self.cost_center,
+						dr_or_cr: self.base_discount_amount,
+						"cost_center": self.cost_center or dontmanageerp.get_default_cost_center(self.company),
 					},
 					item=self,
 				)
 			)
 
-	def validate_multiple_billing(self, ref_dt, item_ref_dn, based_on, parentfield):
+	def validate_multiple_billing(self, ref_dt, item_ref_dn, based_on):
 		from dontmanageerp.controllers.status_updater import get_allowance_for
 
 		item_allowance = {}
@@ -1245,17 +1707,20 @@ class AccountsController(TransactionBase):
 
 		total_overbilled_amt = 0.0
 
+		reference_names = [d.get(item_ref_dn) for d in self.get("items") if d.get(item_ref_dn)]
+		reference_details = self.get_billing_reference_details(
+			reference_names, ref_dt + " Item", based_on
+		)
+
 		for item in self.get("items"):
 			if not item.get(item_ref_dn):
 				continue
 
-			ref_amt = flt(
-				dontmanage.db.get_value(ref_dt + " Item", item.get(item_ref_dn), based_on),
-				self.precision(based_on, item),
-			)
+			ref_amt = flt(reference_details.get(item.get(item_ref_dn)), self.precision(based_on, item))
+
 			if not ref_amt:
 				dontmanage.msgprint(
-					_("System will not check overbilling since amount for Item {0} in {1} is zero").format(
+					_("System will not check over billing since amount for Item {0} in {1} is zero").format(
 						item.item_code, ref_dt
 					),
 					title=_("Warning"),
@@ -1301,6 +1766,16 @@ class AccountsController(TransactionBase):
 				indicator="orange",
 				alert=True,
 			)
+
+	def get_billing_reference_details(self, reference_names, reference_doctype, based_on):
+		return dontmanage._dict(
+			dontmanage.get_all(
+				reference_doctype,
+				filters={"name": ("in", reference_names)},
+				fields=["name", based_on],
+				as_list=1,
+			)
+		)
 
 	def get_billed_amount_for_item(self, item, item_ref_dn, based_on):
 		"""
@@ -1484,6 +1959,7 @@ class AccountsController(TransactionBase):
 					and party_account_currency != self.company_currency
 					and self.currency != party_account_currency
 				):
+
 					dontmanage.throw(
 						_("Accounting Entry for {0}: {1} can only be made in currency: {2}").format(
 							party_type, party, party_account_currency
@@ -1574,7 +2050,7 @@ class AccountsController(TransactionBase):
 			self.remove(item)
 
 	def set_payment_schedule(self):
-		if self.doctype == "Sales Invoice" and self.is_pos:
+		if (self.doctype == "Sales Invoice" and self.is_pos) or self.get("is_opening") == "Yes":
 			self.payment_terms_template = ""
 			return
 
@@ -1591,6 +2067,7 @@ class AccountsController(TransactionBase):
 
 		base_grand_total = self.get("base_rounded_total") or self.base_grand_total
 		grand_total = self.get("rounded_total") or self.grand_total
+		automatically_fetch_payment_terms = 0
 
 		if self.doctype in ("Sales Invoice", "Purchase Invoice"):
 			base_grand_total = base_grand_total - flt(self.base_write_off_amount)
@@ -1636,19 +2113,31 @@ class AccountsController(TransactionBase):
 				)
 				self.append("payment_schedule", data)
 
-		for d in self.get("payment_schedule"):
-			if d.invoice_portion:
-				d.payment_amount = flt(
-					grand_total * flt(d.invoice_portion / 100), d.precision("payment_amount")
-				)
-				d.base_payment_amount = flt(
-					base_grand_total * flt(d.invoice_portion / 100), d.precision("base_payment_amount")
-				)
-				d.outstanding = d.payment_amount
-			elif not d.invoice_portion:
-				d.base_payment_amount = flt(
-					d.payment_amount * self.get("conversion_rate"), d.precision("base_payment_amount")
-				)
+		allocate_payment_based_on_payment_terms = dontmanage.db.get_value(
+			"Payment Terms Template", self.payment_terms_template, "allocate_payment_based_on_payment_terms"
+		)
+
+		if not (
+			automatically_fetch_payment_terms
+			and allocate_payment_based_on_payment_terms
+			and self.linked_order_has_payment_terms(po_or_so, fieldname, doctype)
+		):
+			for d in self.get("payment_schedule"):
+				if d.invoice_portion:
+					d.payment_amount = flt(
+						grand_total * flt(d.invoice_portion / 100), d.precision("payment_amount")
+					)
+					d.base_payment_amount = flt(
+						base_grand_total * flt(d.invoice_portion / 100), d.precision("base_payment_amount")
+					)
+					d.outstanding = d.payment_amount
+				elif not d.invoice_portion:
+					d.base_payment_amount = flt(
+						d.payment_amount * self.get("conversion_rate"), d.precision("base_payment_amount")
+					)
+		else:
+			self.fetch_payment_terms_from_order(po_or_so, doctype)
+			self.ignore_default_payment_terms_template = 1
 
 	def get_order_details(self):
 		if self.doctype == "Sales Invoice":
@@ -1701,6 +2190,10 @@ class AccountsController(TransactionBase):
 				"invoice_portion": schedule.invoice_portion,
 				"mode_of_payment": schedule.mode_of_payment,
 				"description": schedule.description,
+				"payment_amount": schedule.payment_amount,
+				"base_payment_amount": schedule.base_payment_amount,
+				"outstanding": schedule.outstanding,
+				"paid_amount": schedule.paid_amount,
 			}
 
 			if schedule.discount_type == "Percentage":
@@ -1740,7 +2233,7 @@ class AccountsController(TransactionBase):
 			)
 
 	def validate_payment_schedule_amount(self):
-		if self.doctype == "Sales Invoice" and self.is_pos:
+		if (self.doctype == "Sales Invoice" and self.is_pos) or self.get("is_opening") == "Yes":
 			return
 
 		party_account_currency = self.get("party_account_currency")
@@ -1870,12 +2363,14 @@ class AccountsController(TransactionBase):
 		reconcilation_entry.party = secondary_party
 		reconcilation_entry.reference_type = self.doctype
 		reconcilation_entry.reference_name = self.name
-		reconcilation_entry.cost_center = self.cost_center
+		reconcilation_entry.cost_center = self.cost_center or dontmanageerp.get_default_cost_center(
+			self.company
+		)
 
 		advance_entry.account = primary_account
 		advance_entry.party_type = primary_party_type
 		advance_entry.party = primary_party
-		advance_entry.cost_center = self.cost_center
+		advance_entry.cost_center = self.cost_center or dontmanageerp.get_default_cost_center(self.company)
 		advance_entry.is_advance = "Yes"
 
 		if self.doctype == "Sales Invoice":
@@ -1912,6 +2407,46 @@ class AccountsController(TransactionBase):
 			dontmanage.throw(
 				_("Select finance book for the item {0} at row {1}").format(item.item_code, item.idx)
 			)
+
+	def check_if_fields_updated(self, fields_to_check, child_tables):
+		# Check if any field affecting accounting entry is altered
+		doc_before_update = self.get_doc_before_save()
+		accounting_dimensions = get_accounting_dimensions() + ["cost_center", "project"]
+
+		# Check if opening entry check updated
+		needs_repost = doc_before_update.get("is_opening") != self.is_opening
+
+		if not needs_repost:
+			# Parent Level Accounts excluding party account
+			fields_to_check += accounting_dimensions
+			for field in fields_to_check:
+				if doc_before_update.get(field) != self.get(field):
+					needs_repost = 1
+					break
+
+			if not needs_repost:
+				# Check for child tables
+				for table in child_tables:
+					needs_repost = check_if_child_table_updated(
+						doc_before_update.get(table), self.get(table), child_tables[table]
+					)
+					if needs_repost:
+						break
+
+		return needs_repost
+
+	@dontmanage.whitelist()
+	def repost_accounting_entries(self):
+		if self.repost_required:
+			repost_ledger = dontmanage.new_doc("Repost Accounting Ledger")
+			repost_ledger.company = self.company
+			repost_ledger.append("vouchers", {"voucher_type": self.doctype, "voucher_no": self.name})
+			repost_ledger.flags.ignore_permissions = True
+			repost_ledger.insert()
+			repost_ledger.submit()
+			self.db_set("repost_required", 0)
+		else:
+			dontmanage.throw(_("No updates pending for reposting"))
 
 
 @dontmanage.whitelist()
@@ -2000,12 +2535,19 @@ def validate_taxes_and_charges(tax):
 
 def validate_account_head(idx, account, company, context=""):
 	account_company = dontmanage.get_cached_value("Account", account, "company")
+	is_group = dontmanage.get_cached_value("Account", account, "is_group")
 
 	if account_company != company:
 		dontmanage.throw(
 			_("Row {0}: {3} Account {1} does not belong to Company {2}").format(
 				idx, dontmanage.bold(account), dontmanage.bold(company), context
 			),
+			title=_("Invalid Account"),
+		)
+
+	if is_group:
+		dontmanage.throw(
+			_("Row {0}: Account {1} is a Group Account").format(idx, dontmanage.bold(account)),
 			title=_("Invalid Account"),
 		)
 
@@ -2094,46 +2636,52 @@ def get_advance_journal_entries(
 	order_list,
 	include_unallocated=True,
 ):
-	dr_or_cr = (
-		"credit_in_account_currency" if party_type == "Customer" else "debit_in_account_currency"
+	journal_entry = dontmanage.qb.DocType("Journal Entry")
+	journal_acc = dontmanage.qb.DocType("Journal Entry Account")
+	q = (
+		dontmanage.qb.from_(journal_entry)
+		.inner_join(journal_acc)
+		.on(journal_entry.name == journal_acc.parent)
+		.select(
+			ConstantColumn("Journal Entry").as_("reference_type"),
+			(journal_entry.name).as_("reference_name"),
+			(journal_entry.remark).as_("remarks"),
+			(journal_acc[amount_field]).as_("amount"),
+			(journal_acc.name).as_("reference_row"),
+			(journal_acc.reference_name).as_("against_order"),
+			(journal_acc.exchange_rate),
+		)
+		.where(
+			journal_acc.account.isin(party_account)
+			& (journal_acc.party_type == party_type)
+			& (journal_acc.party == party)
+			& (journal_acc.is_advance == "Yes")
+			& (journal_entry.docstatus == 1)
+		)
 	)
+	if party_type == "Customer":
+		q = q.where(journal_acc.credit_in_account_currency > 0)
 
-	conditions = []
+	else:
+		q = q.where(journal_acc.debit_in_account_currency > 0)
+
 	if include_unallocated:
-		conditions.append("ifnull(t2.reference_name, '')=''")
+		q = q.where((journal_acc.reference_name.isnull()) | (journal_acc.reference_name == ""))
 
 	if order_list:
-		order_condition = ", ".join(["%s"] * len(order_list))
-		conditions.append(
-			" (t2.reference_type = '{0}' and ifnull(t2.reference_name, '') in ({1}))".format(
-				order_doctype, order_condition
-			)
+		q = q.where(
+			(journal_acc.reference_type == order_doctype) & ((journal_acc.reference_name).isin(order_list))
 		)
 
-	reference_condition = " and (" + " or ".join(conditions) + ")" if conditions else ""
+	q = q.orderby(journal_entry.posting_date)
 
-	# nosemgrep
-	journal_entries = dontmanage.db.sql(
-		"""
-		select
-			'Journal Entry' as reference_type, t1.name as reference_name,
-			t1.remark as remarks, t2.{0} as amount, t2.name as reference_row,
-			t2.reference_name as against_order, t2.exchange_rate
-		from
-			`tabJournal Entry` t1, `tabJournal Entry Account` t2
-		where
-			t1.name = t2.parent and t2.account = %s
-			and t2.party_type = %s and t2.party = %s
-			and t2.is_advance = 'Yes' and t1.docstatus = 1
-			and {1} > 0 {2}
-		order by t1.posting_date""".format(
-			amount_field, dr_or_cr, reference_condition
-		),
-		[party_account, party_type, party] + order_list,
-		as_dict=1,
-	)
-
+	journal_entries = q.run(as_dict=True)
 	return list(journal_entries)
+
+
+@dontmanageerp.allow_regional
+def get_advance_payment_entries_for_regional(*args, **kwargs):
+	return get_advance_payment_entries(*args, **kwargs)
 
 
 def get_advance_payment_entries(
@@ -2147,65 +2695,125 @@ def get_advance_payment_entries(
 	limit=None,
 	condition=None,
 ):
-	party_account_field = "paid_from" if party_type == "Customer" else "paid_to"
-	currency_field = (
-		"paid_from_account_currency" if party_type == "Customer" else "paid_to_account_currency"
-	)
-	payment_type = "Receive" if party_type == "Customer" else "Pay"
-	exchange_rate_field = (
-		"source_exchange_rate" if payment_type == "Receive" else "target_exchange_rate"
-	)
 
-	payment_entries_against_order, unallocated_payment_entries = [], []
-	limit_cond = "limit %s" % limit if limit else ""
+	payment_entries = []
+	payment_entry = dontmanage.qb.DocType("Payment Entry")
 
 	if order_list or against_all_orders:
+		q = get_common_query(
+			party_type,
+			party,
+			party_account,
+			limit,
+			condition,
+		)
+		payment_ref = dontmanage.qb.DocType("Payment Entry Reference")
+
+		q = q.inner_join(payment_ref).on(payment_entry.name == payment_ref.parent)
+		q = q.select(
+			(payment_ref.allocated_amount).as_("amount"),
+			(payment_ref.name).as_("reference_row"),
+			(payment_ref.reference_name).as_("against_order"),
+		)
+
+		q = q.where(payment_ref.reference_doctype == order_doctype)
 		if order_list:
-			reference_condition = " and t2.reference_name in ({0})".format(
-				", ".join(["%s"] * len(order_list))
-			)
-		else:
-			reference_condition = ""
-			order_list = []
+			q = q.where(payment_ref.reference_name.isin(order_list))
 
-		payment_entries_against_order = dontmanage.db.sql(
-			"""
-			select
-				'Payment Entry' as reference_type, t1.name as reference_name,
-				t1.remarks, t2.allocated_amount as amount, t2.name as reference_row,
-				t2.reference_name as against_order, t1.posting_date,
-				t1.{0} as currency, t1.{4} as exchange_rate
-			from `tabPayment Entry` t1, `tabPayment Entry Reference` t2
-			where
-				t1.name = t2.parent and t1.{1} = %s and t1.payment_type = %s
-				and t1.party_type = %s and t1.party = %s and t1.docstatus = 1
-				and t2.reference_doctype = %s {2}
-			order by t1.posting_date {3}
-		""".format(
-				currency_field, party_account_field, reference_condition, limit_cond, exchange_rate_field
-			),
-			[party_account, payment_type, party_type, party, order_doctype] + order_list,
-			as_dict=1,
-		)
-
+		allocated = list(q.run(as_dict=True))
+		payment_entries += allocated
 	if include_unallocated:
-		unallocated_payment_entries = dontmanage.db.sql(
-			"""
-				select 'Payment Entry' as reference_type, name as reference_name, posting_date,
-				remarks, unallocated_amount as amount, {2} as exchange_rate, {3} as currency
-				from `tabPayment Entry`
-				where
-					{0} = %s and party_type = %s and party = %s and payment_type = %s
-					and docstatus = 1 and unallocated_amount > 0 {condition}
-				order by posting_date {1}
-			""".format(
-				party_account_field, limit_cond, exchange_rate_field, currency_field, condition=condition or ""
-			),
-			(party_account, party_type, party, payment_type),
-			as_dict=1,
+		q = get_common_query(
+			party_type,
+			party,
+			party_account,
+			limit,
+			condition,
 		)
+		q = q.select((payment_entry.unallocated_amount).as_("amount"))
+		q = q.where(payment_entry.unallocated_amount > 0)
 
-	return list(payment_entries_against_order) + list(unallocated_payment_entries)
+		unallocated = list(q.run(as_dict=True))
+		payment_entries += unallocated
+	return payment_entries
+
+
+def get_common_query(
+	party_type,
+	party,
+	party_account,
+	limit,
+	condition,
+):
+	account_type = dontmanage.db.get_value("Party Type", party_type, "account_type")
+	payment_type = "Receive" if account_type == "Receivable" else "Pay"
+	payment_entry = dontmanage.qb.DocType("Payment Entry")
+
+	q = (
+		dontmanage.qb.from_(payment_entry)
+		.select(
+			ConstantColumn("Payment Entry").as_("reference_type"),
+			(payment_entry.name).as_("reference_name"),
+			payment_entry.posting_date,
+			(payment_entry.remarks).as_("remarks"),
+		)
+		.where(payment_entry.payment_type == payment_type)
+		.where(payment_entry.party_type == party_type)
+		.where(payment_entry.party == party)
+		.where(payment_entry.docstatus == 1)
+	)
+
+	if payment_type == "Receive":
+		q = q.select((payment_entry.paid_from_account_currency).as_("currency"))
+		q = q.select(payment_entry.paid_from)
+		q = q.where(payment_entry.paid_from.isin(party_account))
+	else:
+		q = q.select((payment_entry.paid_to_account_currency).as_("currency"))
+		q = q.select(payment_entry.paid_to)
+		q = q.where(payment_entry.paid_to.isin(party_account))
+
+	if payment_type == "Receive":
+		q = q.select((payment_entry.source_exchange_rate).as_("exchange_rate"))
+	else:
+		q = q.select((payment_entry.target_exchange_rate).as_("exchange_rate"))
+
+	if condition:
+		# conditions should be built as an array and passed as Criterion
+		common_filter_conditions = []
+
+		common_filter_conditions.append(payment_entry.company == condition["company"])
+		if condition.get("name", None):
+			common_filter_conditions.append(payment_entry.name.like(f"%{condition.get('name')}%"))
+
+		if condition.get("from_payment_date"):
+			common_filter_conditions.append(payment_entry.posting_date.gte(condition["from_payment_date"]))
+
+		if condition.get("to_payment_date"):
+			common_filter_conditions.append(payment_entry.posting_date.lte(condition["to_payment_date"]))
+
+		if condition.get("get_payments") == True:
+			if condition.get("cost_center"):
+				common_filter_conditions.append(payment_entry.cost_center == condition["cost_center"])
+
+			if condition.get("accounting_dimensions"):
+				for field, val in condition.get("accounting_dimensions").items():
+					common_filter_conditions.append(payment_entry[field] == val)
+
+			if condition.get("minimum_payment_amount"):
+				common_filter_conditions.append(
+					payment_entry.unallocated_amount.gte(condition["minimum_payment_amount"])
+				)
+
+			if condition.get("maximum_payment_amount"):
+				common_filter_conditions.append(
+					payment_entry.unallocated_amount.lte(condition["maximum_payment_amount"])
+				)
+		q = q.where(Criterion.all(common_filter_conditions))
+
+	q = q.orderby(payment_entry.posting_date)
+	q = q.limit(limit) if limit else q
+
+	return q
 
 
 def update_invoice_status():
@@ -2402,7 +3010,7 @@ def set_order_defaults(
 	Returns a Sales/Purchase Order Item child item containing the default values
 	"""
 	p_doc = dontmanage.get_doc(parent_doctype, parent_doctype_name)
-	child_item = dontmanage.new_doc(child_doctype, p_doc, child_docname)
+	child_item = dontmanage.new_doc(child_doctype, parent_doc=p_doc, parentfield=child_docname)
 	item = dontmanage.get_doc("Item", trans_item.get("item_code"))
 
 	for field in ("item_code", "item_name", "description", "item_group"):
@@ -2600,6 +3208,27 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 
 		return update_supplied_items
 
+	def validate_fg_item_for_subcontracting(new_data, is_new):
+		if is_new:
+			if not new_data.get("fg_item"):
+				dontmanage.throw(
+					_("Finished Good Item is not specified for service item {0}").format(new_data["item_code"])
+				)
+			else:
+				is_sub_contracted_item, default_bom = dontmanage.db.get_value(
+					"Item", new_data["fg_item"], ["is_sub_contracted_item", "default_bom"]
+				)
+
+				if not is_sub_contracted_item:
+					dontmanage.throw(
+						_("Finished Good Item {0} must be a sub-contracted item").format(new_data["fg_item"])
+					)
+				elif not default_bom:
+					dontmanage.throw(_("Default BOM not found for FG Item {0}").format(new_data["fg_item"]))
+
+		if not new_data.get("fg_item_qty"):
+			dontmanage.throw(_("Finished Good Item {0} Qty can not be zero").format(new_data["fg_item"]))
+
 	data = json.loads(trans_items)
 
 	any_qty_changed = False  # updated to true if any item's qty changes
@@ -2631,6 +3260,7 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 
 			prev_rate, new_rate = flt(child_item.get("rate")), flt(d.get("rate"))
 			prev_qty, new_qty = flt(child_item.get("qty")), flt(d.get("qty"))
+			prev_fg_qty, new_fg_qty = flt(child_item.get("fg_item_qty")), flt(d.get("fg_item_qty"))
 			prev_con_fac, new_con_fac = flt(child_item.get("conversion_factor")), flt(
 				d.get("conversion_factor")
 			)
@@ -2643,6 +3273,7 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 
 			rate_unchanged = prev_rate == new_rate
 			qty_unchanged = prev_qty == new_qty
+			fg_qty_unchanged = prev_fg_qty == new_fg_qty
 			uom_unchanged = prev_uom == new_uom
 			conversion_factor_unchanged = prev_con_fac == new_con_fac
 			any_conversion_factor_changed |= not conversion_factor_unchanged
@@ -2652,6 +3283,7 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 			if (
 				rate_unchanged
 				and qty_unchanged
+				and fg_qty_unchanged
 				and conversion_factor_unchanged
 				and uom_unchanged
 				and date_unchanged
@@ -2662,21 +3294,35 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 		if flt(child_item.get("qty")) != flt(d.get("qty")):
 			any_qty_changed = True
 
+		if (
+			parent.doctype == "Purchase Order"
+			and parent.is_subcontracted
+			and not parent.is_old_subcontracting_flow
+		):
+			validate_fg_item_for_subcontracting(d, new_child_flag)
+			child_item.fg_item_qty = flt(d["fg_item_qty"])
+
+			if new_child_flag:
+				child_item.fg_item = d["fg_item"]
+
 		child_item.qty = flt(d.get("qty"))
 		rate_precision = child_item.precision("rate") or 2
 		conv_fac_precision = child_item.precision("conversion_factor") or 2
 		qty_precision = child_item.precision("qty") or 2
 
-		if flt(child_item.billed_amt, rate_precision) > flt(
-			flt(d.get("rate"), rate_precision) * flt(d.get("qty"), qty_precision), rate_precision
-		):
+		# Amount cannot be lesser than billed amount, except for negative amounts
+		row_rate = flt(d.get("rate"), rate_precision)
+		amount_below_billed_amt = flt(child_item.billed_amt, rate_precision) > flt(
+			row_rate * flt(d.get("qty"), qty_precision), rate_precision
+		)
+		if amount_below_billed_amt and row_rate > 0.0:
 			dontmanage.throw(
 				_("Row #{0}: Cannot set Rate if amount is greater than billed amount for Item {1}.").format(
 					child_item.idx, child_item.item_code
 				)
 			)
 		else:
-			child_item.rate = flt(d.get("rate"), rate_precision)
+			child_item.rate = row_rate
 
 		if d.get("conversion_factor"):
 			if child_item.stock_uom == child_item.uom:
@@ -2760,16 +3406,28 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 
 	if parent_doctype == "Purchase Order":
 		update_last_purchase_rate(parent, is_submit=1)
-		parent.update_prevdoc_status()
+
+		if any_qty_changed or items_added_or_removed or any_conversion_factor_changed:
+			parent.update_prevdoc_status()
+
 		parent.update_requested_qty()
 		parent.update_ordered_qty()
 		parent.update_ordered_and_reserved_qty()
 		parent.update_receiving_percentage()
-		if parent.is_old_subcontracting_flow:
-			if should_update_supplied_items(parent):
-				parent.update_reserved_qty_for_subcontract()
-				parent.create_raw_materials_supplied()
-			parent.save()
+
+		if parent.is_subcontracted:
+			if parent.is_old_subcontracting_flow:
+				if should_update_supplied_items(parent):
+					parent.update_reserved_qty_for_subcontract()
+					parent.create_raw_materials_supplied()
+				parent.save()
+			else:
+				if not parent.can_update_items():
+					dontmanage.throw(
+						_(
+							"Items cannot be updated as Subcontracting Order is created against the Purchase Order {0}."
+						).format(dontmanage.bold(parent.name))
+					)
 	else:  # Sales Order
 		parent.validate_warehouse()
 		parent.update_reserved_qty()
@@ -2784,6 +3442,36 @@ def update_child_qty_rate(parent_doctype, trans_items, parent_doctype_name, chil
 	parent.update_billing_percentage()
 	parent.set_status()
 
+	# Cancel and Recreate Stock Reservation Entries.
+	if parent_doctype == "Sales Order":
+		from dontmanageerp.stock.doctype.stock_reservation_entry.stock_reservation_entry import (
+			cancel_stock_reservation_entries,
+			has_reserved_stock,
+		)
+
+		if has_reserved_stock(parent.doctype, parent.name):
+			cancel_stock_reservation_entries(parent.doctype, parent.name)
+
+			if parent.per_picked == 0:
+				parent.create_stock_reservation_entries()
+
+
+def check_if_child_table_updated(
+	child_table_before_update, child_table_after_update, fields_to_check
+):
+	accounting_dimensions = get_accounting_dimensions() + ["cost_center", "project"]
+	# Check if any field affecting accounting entry is altered
+	for index, item in enumerate(child_table_after_update):
+		for field in fields_to_check:
+			if child_table_before_update[index].get(field) != item.get(field):
+				return True
+
+		for dimension in accounting_dimensions:
+			if child_table_before_update[index].get(dimension) != item.get(dimension):
+				return True
+
+	return False
+
 
 @dontmanageerp.allow_regional
 def validate_regional(doc):
@@ -2792,4 +3480,9 @@ def validate_regional(doc):
 
 @dontmanageerp.allow_regional
 def validate_einvoice_fields(doc):
+	pass
+
+
+@dontmanageerp.allow_regional
+def update_gl_dict_with_regional_fields(doc, gl_dict):
 	pass

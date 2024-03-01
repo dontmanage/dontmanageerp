@@ -30,11 +30,6 @@ dontmanageerp.LeadController = class LeadController extends dontmanage.ui.form.C
 		var me = this;
 		let doc = this.frm.doc;
 		dontmanageerp.toggle_naming_series();
-		dontmanage.dynamic_link = {
-			doc: doc,
-			fieldname: 'name',
-			doctype: 'Lead'
-		};
 
 		if (!this.frm.is_new() && doc.__onload && !doc.__onload.is_customer) {
 			this.frm.add_custom_button(__("Customer"), this.make_customer, __("Create"));
@@ -59,6 +54,7 @@ dontmanageerp.LeadController = class LeadController extends dontmanage.ui.form.C
 	}
 
 	add_lead_to_prospect () {
+		let me = this;
 		dontmanage.prompt([
 			{
 				fieldname: 'prospect',
@@ -72,12 +68,12 @@ dontmanageerp.LeadController = class LeadController extends dontmanage.ui.form.C
 			dontmanage.call({
 				method: 'dontmanageerp.crm.doctype.lead.lead.add_lead_to_prospect',
 				args: {
-					'lead': cur_frm.doc.name,
+					'lead': me.frm.doc.name,
 					'prospect': data.prospect
 				},
 				callback: function(r) {
 					if (!r.exc) {
-						frm.reload_doc();
+						me.frm.reload_doc();
 					}
 				},
 				freeze: true,

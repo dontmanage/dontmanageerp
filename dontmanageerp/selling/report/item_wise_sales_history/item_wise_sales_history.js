@@ -1,6 +1,6 @@
 // Copyright (c) 2019, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Item-wise Sales History"] = {
 	"filters": [

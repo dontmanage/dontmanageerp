@@ -4,19 +4,76 @@
 
 import dontmanage
 from email_reply_parser import EmailReplyParser
-from dontmanage import _
+from dontmanage import _, qb
 from dontmanage.desk.reportview import get_match_cond
 from dontmanage.model.document import Document
+from dontmanage.query_builder import Interval
+from dontmanage.query_builder.functions import Count, CurDate, Date, Sum, UnixTimestamp
 from dontmanage.utils import add_days, flt, get_datetime, get_time, get_url, nowtime, today
+from dontmanage.utils.user import is_website_user
 
 from dontmanageerp import get_default_company
 from dontmanageerp.controllers.queries import get_filters_cond
+from dontmanageerp.controllers.website_list_for_contact import get_customers_suppliers
 from dontmanageerp.setup.doctype.holiday_list.holiday_list import is_holiday
 
 
 class Project(Document):
-	def get_feed(self):
-		return "{0}: {1}".format(_(self.status), dontmanage.safe_decode(self.project_name))
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.projects.doctype.project_user.project_user import ProjectUser
+
+		actual_end_date: DF.Date | None
+		actual_start_date: DF.Date | None
+		actual_time: DF.Float
+		collect_progress: DF.Check
+		company: DF.Link
+		copied_from: DF.Data | None
+		cost_center: DF.Link | None
+		customer: DF.Link | None
+		daily_time_to_send: DF.Time | None
+		day_to_send: DF.Literal[
+			"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+		]
+		department: DF.Link | None
+		estimated_costing: DF.Currency
+		expected_end_date: DF.Date | None
+		expected_start_date: DF.Date | None
+		first_email: DF.Time | None
+		frequency: DF.Literal["Hourly", "Twice Daily", "Daily", "Weekly"]
+		from_time: DF.Time | None
+		gross_margin: DF.Currency
+		holiday_list: DF.Link | None
+		is_active: DF.Literal["Yes", "No"]
+		message: DF.Text | None
+		naming_series: DF.Literal["PROJ-.####"]
+		notes: DF.TextEditor | None
+		per_gross_margin: DF.Percent
+		percent_complete: DF.Percent
+		percent_complete_method: DF.Literal["Manual", "Task Completion", "Task Progress", "Task Weight"]
+		priority: DF.Literal["Medium", "Low", "High"]
+		project_name: DF.Data
+		project_template: DF.Link | None
+		project_type: DF.Link | None
+		sales_order: DF.Link | None
+		second_email: DF.Time | None
+		status: DF.Literal["Open", "Completed", "Cancelled"]
+		to_time: DF.Time | None
+		total_billable_amount: DF.Currency
+		total_billed_amount: DF.Currency
+		total_consumed_material_cost: DF.Currency
+		total_costing_amount: DF.Currency
+		total_purchase_cost: DF.Currency
+		total_sales_amount: DF.Currency
+		users: DF.Table[ProjectUser]
+		weekly_time_to_send: DF.Time | None
+	# end: auto-generated types
 
 	def onload(self):
 		self.set_onload(
@@ -42,6 +99,8 @@ class Project(Document):
 		self.send_welcome_email()
 		self.update_costing()
 		self.update_percent_complete()
+		self.validate_from_to_dates("expected_start_date", "expected_end_date")
+		self.validate_from_to_dates("actual_start_date", "actual_end_date")
 
 	def copy_from_template(self):
 		"""
@@ -67,6 +126,7 @@ class Project(Document):
 				tmp_task_details.append(template_task_details)
 				task = self.create_task_from_template(template_task_details)
 				project_tasks.append(task)
+
 			self.dependency_mapping(tmp_task_details, project_tasks)
 
 	def create_task_from_template(self, task_details):
@@ -84,6 +144,7 @@ class Project(Document):
 				issue=task_details.issue,
 				is_group=task_details.is_group,
 				color=task_details.color,
+				template_task=task_details.name,
 			)
 		).insert()
 
@@ -103,32 +164,29 @@ class Project(Document):
 		return date
 
 	def dependency_mapping(self, template_tasks, project_tasks):
-		for template_task in template_tasks:
-			project_task = list(filter(lambda x: x.subject == template_task.subject, project_tasks))[0]
-			project_task = dontmanage.get_doc("Task", project_task.name)
+		for project_task in project_tasks:
+			template_task = dontmanage.get_doc("Task", project_task.template_task)
+
 			self.check_depends_on_value(template_task, project_task, project_tasks)
 			self.check_for_parent_tasks(template_task, project_task, project_tasks)
 
 	def check_depends_on_value(self, template_task, project_task, project_tasks):
 		if template_task.get("depends_on") and not project_task.get("depends_on"):
+			project_template_map = {pt.template_task: pt for pt in project_tasks}
+
 			for child_task in template_task.get("depends_on"):
-				child_task_subject = dontmanage.db.get_value("Task", child_task.task, "subject")
-				corresponding_project_task = list(
-					filter(lambda x: x.subject == child_task_subject, project_tasks)
-				)
-				if len(corresponding_project_task):
-					project_task.append("depends_on", {"task": corresponding_project_task[0].name})
+				if project_template_map and project_template_map.get(child_task.task):
+					project_task.reload()  # reload, as it might have been updated in the previous iteration
+					project_task.append("depends_on", {"task": project_template_map.get(child_task.task).name})
 					project_task.save()
 
 	def check_for_parent_tasks(self, template_task, project_task, project_tasks):
 		if template_task.get("parent_task") and not project_task.get("parent_task"):
-			parent_task_subject = dontmanage.db.get_value("Task", template_task.get("parent_task"), "subject")
-			corresponding_project_task = list(
-				filter(lambda x: x.subject == parent_task_subject, project_tasks)
-			)
-			if len(corresponding_project_task):
-				project_task.parent_task = corresponding_project_task[0].name
-				project_task.save()
+			for pt in project_tasks:
+				if pt.template_task == template_task.parent_task:
+					project_task.parent_task = pt.name
+					project_task.save()
+					break
 
 	def is_row_updated(self, row, existing_task_data, fields):
 		if self.get("__islocal") or not existing_task_data:
@@ -247,12 +305,7 @@ class Project(Document):
 			self.per_gross_margin = (self.gross_margin / flt(self.total_billed_amount)) * 100
 
 	def update_purchase_costing(self):
-		total_purchase_cost = dontmanage.db.sql(
-			"""select sum(base_net_amount)
-			from `tabPurchase Invoice Item` where project = %s and docstatus=1""",
-			self.name,
-		)
-
+		total_purchase_cost = calculate_total_purchase_cost(self.name)
 		self.total_purchase_cost = total_purchase_cost and total_purchase_cost[0][0] or 0
 
 	def update_sales_amount(self):
@@ -298,26 +351,37 @@ class Project(Document):
 				user.welcome_email_sent = 1
 
 
-def get_timeline_data(doctype, name):
+def get_timeline_data(doctype: str, name: str) -> dict[int, int]:
 	"""Return timeline for attendance"""
+
+	timesheet_detail = dontmanage.qb.DocType("Timesheet Detail")
+
 	return dict(
-		dontmanage.db.sql(
-			"""select unix_timestamp(from_time), count(*)
-		from `tabTimesheet Detail` where project=%s
-			and from_time > date_sub(curdate(), interval 1 year)
-			and docstatus < 2
-			group by date(from_time)""",
-			name,
-		)
+		dontmanage.qb.from_(timesheet_detail)
+		.select(UnixTimestamp(timesheet_detail.from_time), Count("*"))
+		.where(timesheet_detail.project == name)
+		.where(timesheet_detail.from_time > CurDate() - Interval(years=1))
+		.where(timesheet_detail.docstatus < 2)
+		.groupby(Date(timesheet_detail.from_time))
+		.run()
 	)
 
 
 def get_project_list(
 	doctype, txt, filters, limit_start, limit_page_length=20, order_by="modified"
 ):
+	customers, suppliers = get_customers_suppliers("Project", dontmanage.session.user)
+
+	ignore_permissions = False
+	if is_website_user() and dontmanage.session.user != "Guest":
+		if not filters:
+			filters = []
+
+		if customers:
+			filters.append([doctype, "customer", "in", customers])
+			ignore_permissions = True
+
 	meta = dontmanage.get_meta(doctype)
-	if not filters:
-		filters = []
 
 	fields = "distinct *"
 
@@ -348,18 +412,26 @@ def get_project_list(
 		limit_start=limit_start,
 		limit_page_length=limit_page_length,
 		order_by=order_by,
+		ignore_permissions=ignore_permissions,
 	)
 
 
 def get_list_context(context=None):
-	return {
-		"show_sidebar": True,
-		"show_search": True,
-		"no_breadcrumbs": True,
-		"title": _("Projects"),
-		"get_list": get_project_list,
-		"row_template": "templates/includes/projects/project_row.html",
-	}
+	from dontmanageerp.controllers.website_list_for_contact import get_list_context
+
+	list_context = get_list_context(context)
+	list_context.update(
+		{
+			"show_sidebar": True,
+			"show_search": True,
+			"no_breadcrumbs": True,
+			"title": _("Projects"),
+			"get_list": get_project_list,
+			"row_template": "templates/includes/projects/project_row.html",
+		}
+	)
+
+	return list_context
 
 
 @dontmanage.whitelist()
@@ -672,3 +744,29 @@ def get_holiday_list(company=None):
 
 def get_users_email(doc):
 	return [d.email for d in doc.users if dontmanage.db.get_value("User", d.user, "enabled")]
+
+
+def calculate_total_purchase_cost(project: str | None = None):
+	if project:
+		pitem = qb.DocType("Purchase Invoice Item")
+		dontmanage.qb.DocType("Purchase Invoice Item")
+		total_purchase_cost = (
+			qb.from_(pitem)
+			.select(Sum(pitem.base_net_amount))
+			.where((pitem.project == project) & (pitem.docstatus == 1))
+			.run(as_list=True)
+		)
+		return total_purchase_cost
+	return None
+
+
+@dontmanage.whitelist()
+def recalculate_project_total_purchase_cost(project: str | None = None):
+	if project:
+		total_purchase_cost = calculate_total_purchase_cost(project)
+		dontmanage.db.set_value(
+			"Project",
+			project,
+			"total_purchase_cost",
+			(total_purchase_cost and total_purchase_cost[0][0] or 0),
+		)

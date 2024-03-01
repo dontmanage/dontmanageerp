@@ -4,6 +4,7 @@
 
 import dontmanage
 from dontmanage import _
+from dontmanage.utils import get_link_to_form, parse_json
 
 import dontmanageerp
 from dontmanageerp.accounts.utils import get_currency_precision, get_stock_accounts
@@ -134,3 +135,35 @@ def get_columns(filters):
 			"width": "120",
 		},
 	]
+
+
+@dontmanage.whitelist()
+def create_reposting_entries(rows, company):
+	if isinstance(rows, str):
+		rows = parse_json(rows)
+
+	entries = []
+	for row in rows:
+		row = dontmanage._dict(row)
+
+		try:
+			doc = dontmanage.get_doc(
+				{
+					"doctype": "Repost Item Valuation",
+					"based_on": "Transaction",
+					"status": "Queued",
+					"voucher_type": row.voucher_type,
+					"voucher_no": row.voucher_no,
+					"posting_date": row.posting_date,
+					"company": company,
+					"allow_nagative_stock": 1,
+				}
+			).submit()
+
+			entries.append(get_link_to_form("Repost Item Valuation", doc.name))
+		except dontmanage.DuplicateEntryError:
+			pass
+
+	if entries:
+		entries = ", ".join(entries)
+		dontmanage.msgprint(_("Reposting entries created: {0}").format(entries))

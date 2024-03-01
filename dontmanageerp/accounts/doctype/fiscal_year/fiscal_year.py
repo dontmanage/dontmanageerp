@@ -4,31 +4,30 @@
 
 import dontmanage
 from dateutil.relativedelta import relativedelta
-from dontmanage import _, msgprint
+from dontmanage import _
 from dontmanage.model.document import Document
 from dontmanage.utils import add_days, add_years, cstr, getdate
 
 
-class FiscalYearIncorrectDate(dontmanage.ValidationError):
-	pass
-
-
 class FiscalYear(Document):
-	@dontmanage.whitelist()
-	def set_as_default(self):
-		dontmanage.db.set_value("Global Defaults", None, "current_fiscal_year", self.name)
-		global_defaults = dontmanage.get_doc("Global Defaults")
-		global_defaults.check_permission("write")
-		global_defaults.on_update()
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
 
-		# clear cache
-		dontmanage.clear_cache()
+	from typing import TYPE_CHECKING
 
-		msgprint(
-			_(
-				"{0} is now the default Fiscal Year. Please refresh your browser for the change to take effect."
-			).format(self.name)
-		)
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.fiscal_year_company.fiscal_year_company import FiscalYearCompany
+
+		auto_created: DF.Check
+		companies: DF.Table[FiscalYearCompany]
+		disabled: DF.Check
+		is_short_year: DF.Check
+		year: DF.Data
+		year_end_date: DF.Date
+		year_start_date: DF.Date
+	# end: auto-generated types
 
 	def validate(self):
 		self.validate_dates()
@@ -53,23 +52,18 @@ class FiscalYear(Document):
 					)
 
 	def validate_dates(self):
+		self.validate_from_to_dates("year_start_date", "year_end_date")
 		if self.is_short_year:
 			# Fiscal Year can be shorter than one year, in some jurisdictions
 			# under certain circumstances. For example, in the USA and Germany.
 			return
-
-		if getdate(self.year_start_date) > getdate(self.year_end_date):
-			dontmanage.throw(
-				_("Fiscal Year Start Date should be one year earlier than Fiscal Year End Date"),
-				FiscalYearIncorrectDate,
-			)
 
 		date = getdate(self.year_start_date) + relativedelta(years=1) - relativedelta(days=1)
 
 		if getdate(self.year_end_date) != date:
 			dontmanage.throw(
 				_("Fiscal Year End Date should be one year after Fiscal Year Start Date"),
-				FiscalYearIncorrectDate,
+				dontmanage.exceptions.InvalidDates,
 			)
 
 	def on_update(self):
@@ -77,13 +71,6 @@ class FiscalYear(Document):
 		dontmanage.cache().delete_value("fiscal_years")
 
 	def on_trash(self):
-		global_defaults = dontmanage.get_doc("Global Defaults")
-		if global_defaults.current_fiscal_year == self.name:
-			dontmanage.throw(
-				_(
-					"You cannot delete Fiscal Year {0}. Fiscal Year {0} is set as default in Global Settings"
-				).format(self.name)
-			)
 		dontmanage.cache().delete_value("fiscal_years")
 
 	def validate_overlap(self):

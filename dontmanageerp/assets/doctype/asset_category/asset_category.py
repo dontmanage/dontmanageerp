@@ -9,6 +9,25 @@ from dontmanage.utils import cint, get_link_to_form
 
 
 class AssetCategory(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.assets.doctype.asset_category_account.asset_category_account import (
+			AssetCategoryAccount,
+		)
+		from dontmanageerp.assets.doctype.asset_finance_book.asset_finance_book import AssetFinanceBook
+
+		accounts: DF.Table[AssetCategoryAccount]
+		asset_category_name: DF.Data
+		enable_cwip_accounting: DF.Check
+		finance_books: DF.Table[AssetFinanceBook]
+	# end: auto-generated types
+
 	def validate(self):
 		self.validate_finance_books()
 		self.validate_account_types()
@@ -53,7 +72,7 @@ class AssetCategory(Document):
 		account_type_map = {
 			"fixed_asset_account": {"account_type": ["Fixed Asset"]},
 			"accumulated_depreciation_account": {"account_type": ["Accumulated Depreciation"]},
-			"depreciation_expense_account": {"root_type": ["Expense", "Income"]},
+			"depreciation_expense_account": {"account_type": ["Depreciation"]},
 			"capital_work_in_progress_account": {"account_type": ["Capital Work in Progress"]},
 		}
 		for d in self.accounts:
@@ -67,12 +86,12 @@ class AssetCategory(Document):
 					if selected_key_type not in expected_key_types:
 						dontmanage.throw(
 							_(
-								"Row #{}: {} of {} should be {}. Please modify the account or select a different account."
+								"Row #{0}: {1} of {2} should be {3}. Please update the {1} or select a different account."
 							).format(
 								d.idx,
 								dontmanage.unscrub(key_to_match),
 								dontmanage.bold(selected_account),
-								dontmanage.bold(expected_key_types),
+								dontmanage.bold(" or ".join(expected_key_types)),
 							),
 							title=_("Invalid Account"),
 						)
@@ -96,7 +115,6 @@ class AssetCategory(Document):
 				dontmanage.throw(msg, title=_("Missing Account"))
 
 
-@dontmanage.whitelist()
 def get_asset_category_account(
 	fieldname, item=None, asset=None, account=None, asset_category=None, company=None
 ):

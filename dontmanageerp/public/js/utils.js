@@ -8,7 +8,7 @@ $.extend(dontmanageerp, {
 		if(!company && cur_frm)
 			company = cur_frm.doc.company;
 		if(company)
-			return dontmanage.get_doc(":Company", company).default_currency || dontmanage.boot.sysdefaults.currency;
+			return dontmanage.get_doc(":Company", company)?.default_currency || dontmanage.boot.sysdefaults.currency;
 		else
 			return dontmanage.boot.sysdefaults.currency;
 	},
@@ -21,26 +21,29 @@ $.extend(dontmanageerp, {
 	},
 
 	toggle_naming_series: function() {
-		if(cur_frm.fields_dict.naming_series) {
+		if(cur_frm && cur_frm.fields_dict.naming_series) {
 			cur_frm.toggle_display("naming_series", cur_frm.doc.__islocal?true:false);
 		}
 	},
 
-	hide_company: function() {
-		if(cur_frm.fields_dict.company) {
+	hide_company: function(frm) {
+		if(frm?.fields_dict.company) {
 			var companies = Object.keys(locals[":Company"] || {});
 			if(companies.length === 1) {
-				if(!cur_frm.doc.company) cur_frm.set_value("company", companies[0]);
-				cur_frm.toggle_display("company", false);
+				if(!frm.doc.company) frm.set_value("company", companies[0]);
+				frm.toggle_display("company", false);
 			} else if(dontmanageerp.last_selected_company) {
-				if(!cur_frm.doc.company) cur_frm.set_value("company", dontmanageerp.last_selected_company);
+				if(!frm.doc.company) frm.set_value("company", dontmanageerp.last_selected_company);
 			}
 		}
 	},
 
 	is_perpetual_inventory_enabled: function(company) {
 		if(company) {
-			return dontmanage.get_doc(":Company", company).enable_perpetual_inventory
+			let company_local = locals[":Company"] && locals[":Company"][company];
+			if(company_local) {
+				return cint(company_local.enable_perpetual_inventory);
+			}
 		}
 	},
 
@@ -110,6 +113,27 @@ $.extend(dontmanageerp.utils, {
 						[company_wise_info[0].loyalty_points]), 'blue');
 				}
 			}
+		}
+	},
+
+	view_serial_batch_nos: function(frm) {
+		if (!frm.doc?.items) {
+			return;
+		}
+
+		let bundle_ids = frm.doc.items.filter(d => d.serial_and_batch_bundle);
+
+		if (bundle_ids?.length) {
+			frm.add_custom_button(__('Serial / Batch Nos'), () => {
+				dontmanage.route_options = {
+					"voucher_no": frm.doc.name,
+					"voucher_type": frm.doc.doctype,
+					"from_date": frm.doc.posting_date || frm.doc.transaction_date,
+					"to_date": frm.doc.posting_date || frm.doc.transaction_date,
+					"company": frm.doc.company,
+				};
+				dontmanage.set_route("query-report", "Serial and Batch Summary");
+			}, __('View'));
 		}
 	},
 
@@ -350,6 +374,63 @@ $.extend(dontmanageerp.utils, {
 		}
 
 	},
+
+	pick_serial_and_batch_bundle(frm, cdt, cdn, type_of_transaction, warehouse_field) {
+		let item_row = dontmanage.get_doc(cdt, cdn);
+		item_row.type_of_transaction = type_of_transaction;
+
+		dontmanage.db.get_value("Item", item_row.item_code, ["has_batch_no", "has_serial_no"])
+			.then((r) => {
+				item_row.has_batch_no = r.message.has_batch_no;
+				item_row.has_serial_no = r.message.has_serial_no;
+
+				dontmanage.require("assets/dontmanageerp/js/utils/serial_no_batch_selector.js", function() {
+					new dontmanageerp.SerialBatchPackageSelector(frm, item_row, (r) => {
+						if (r) {
+							let update_values = {
+								"serial_and_batch_bundle": r.name,
+								"qty": Math.abs(r.total_qty)
+							}
+
+							if (!warehouse_field) {
+								warehouse_field = "warehouse";
+							}
+
+							if (r.warehouse) {
+								update_values[warehouse_field] = r.warehouse;
+							}
+
+							dontmanage.model.set_value(item_row.doctype, item_row.name, update_values);
+						}
+					});
+				});
+		});
+	},
+
+	get_fiscal_year: function(date, with_dates=false, boolean=false) {
+		if(!date) {
+			date = dontmanage.datetime.get_today();
+		}
+
+		let fiscal_year = '';
+		dontmanage.call({
+			method: "dontmanageerp.accounts.utils.get_fiscal_year",
+			args: {
+				date: date,
+				boolean: boolean
+			},
+			async: false,
+			callback: function(r) {
+				if (r.message) {
+					if (with_dates)
+						fiscal_year = r.message;
+					else
+						fiscal_year = r.message[0];
+				}
+			}
+		});
+		return fiscal_year;
+	}
 });
 
 dontmanageerp.utils.select_alternate_items = function(opts) {
@@ -494,6 +575,7 @@ dontmanageerp.utils.update_child_items = function(opts) {
 	const cannot_add_row = (typeof opts.cannot_add_row === 'undefined') ? true : opts.cannot_add_row;
 	const child_docname = (typeof opts.cannot_add_row === 'undefined') ? "items" : opts.child_docname;
 	const child_meta = dontmanage.get_meta(`${frm.doc.doctype} Item`);
+	const has_reserved_stock = opts.has_reserved_stock ? true : false;
 	const get_precision = (fieldname) => child_meta.fields.find(f => f.fieldname == fieldname).precision;
 
 	this.data = frm.doc[opts.child_docname].map((d) => {
@@ -506,7 +588,9 @@ dontmanageerp.utils.update_child_items = function(opts) {
 			"conversion_factor": d.conversion_factor,
 			"qty": d.qty,
 			"rate": d.rate,
-			"uom": d.uom
+			"uom": d.uom,
+			"fg_item": d.fg_item,
+			"fg_item_qty": d.fg_item_qty,
 		}
 	});
 
@@ -600,14 +684,45 @@ dontmanageerp.utils.update_child_items = function(opts) {
 		fields.splice(3, 0, {
 			fieldtype: 'Float',
 			fieldname: "conversion_factor",
-			in_list_view: 1,
 			label: __("Conversion Factor"),
 			precision: get_precision('conversion_factor')
 		})
 	}
 
-	new dontmanage.ui.Dialog({
+	if (frm.doc.doctype == 'Purchase Order' && frm.doc.is_subcontracted && !frm.doc.is_old_subcontracting_flow) {
+		fields.push({
+			fieldtype:'Link',
+			fieldname:'fg_item',
+			options: 'Item',
+			reqd: 1,
+			in_list_view: 0,
+			read_only: 0,
+			disabled: 0,
+			label: __('Finished Good Item'),
+			get_query: () => {
+				return {
+					filters: {
+						'is_stock_item': 1,
+						'is_sub_contracted_item': 1,
+						'default_bom': ['!=', '']
+					}
+				}
+			},
+		}, {
+			fieldtype:'Float',
+			fieldname:'fg_item_qty',
+			reqd: 1,
+			default: 0,
+			read_only: 0,
+			in_list_view: 0,
+			label: __('Finished Good Item Qty'),
+			precision: get_precision('fg_item_qty')
+		})
+	}
+
+	let dialog = new dontmanage.ui.Dialog({
 		title: __("Update Items"),
+		size: "extra-large",
 		fields: [
 			{
 				fieldname: "trans_items",
@@ -624,6 +739,17 @@ dontmanageerp.utils.update_child_items = function(opts) {
 			},
 		],
 		primary_action: function() {
+			if (frm.doctype == "Sales Order" && has_reserved_stock) {
+				this.hide();
+				dontmanage.confirm(
+					__('The reserved stock will be released when you update items. Are you certain you wish to proceed?'),
+					() => this.update_items(),
+				)
+			} else {
+				this.update_items();
+			}
+		},
+		update_items: function() {
 			const trans_items = this.get_values()["trans_items"].filter((item) => !!item.item_code);
 			dontmanage.call({
 				method: 'dontmanageerp.controllers.accounts_controller.update_child_qty_rate',
@@ -642,8 +768,13 @@ dontmanageerp.utils.update_child_items = function(opts) {
 			refresh_field("items");
 		},
 		primary_action_label: __('Update')
-	}).show();
+	})
+
+	dialog.show();
 }
+
+
+
 
 dontmanageerp.utils.map_current_doc = function(opts) {
 	function _map() {
@@ -711,9 +842,11 @@ dontmanageerp.utils.map_current_doc = function(opts) {
 				"target_doc": cur_frm.doc,
 				"args": opts.args
 			},
+			freeze: true,
+			freeze_message: __("Mapping {0} ...", [opts.source_doctype]),
 			callback: function(r) {
 				if(!r.exc) {
-					var doc = dontmanage.model.sync(r.message);
+					dontmanage.model.sync(r.message);
 					cur_frm.dirty();
 					cur_frm.refresh();
 				}
@@ -735,11 +868,20 @@ dontmanageerp.utils.map_current_doc = function(opts) {
 	}
 
 	if (opts.source_doctype) {
+		let data_fields = [];
+		if(opts.source_doctype == "Purchase Receipt") {
+			data_fields.push({
+				fieldname: 'merge_taxes',
+				fieldtype: 'Check',
+				label: __('Merge taxes from multiple documents'),
+			});
+		}
 		const d = new dontmanage.ui.form.MultiSelectDialog({
 			doctype: opts.source_doctype,
 			target: opts.target,
 			date_field: opts.date_field || undefined,
 			setters: opts.setters,
+			data_fields: data_fields,
 			get_query: opts.get_query,
 			add_filters_group: 1,
 			allow_child_item_selection: opts.allow_child_item_selection,
@@ -753,7 +895,7 @@ dontmanageerp.utils.map_current_doc = function(opts) {
 					return;
 				}
 				opts.source_name = values;
-				if (opts.allow_child_item_selection) {
+				if (opts.allow_child_item_selection || opts.source_doctype == "Purchase Receipt") {
 					// args contains filtered child docnames
 					opts.args = args;
 				}
@@ -822,95 +964,87 @@ $(document).on('app_ready', function() {
 
 // Show SLA dashboard
 $(document).on('app_ready', function() {
-	dontmanage.call({
-		method: 'dontmanageerp.support.doctype.service_level_agreement.service_level_agreement.get_sla_doctypes',
-		callback: function(r) {
-			if (!r.message)
-				return;
+	$.each(dontmanage.boot.service_level_agreement_doctypes, function(_i, d) {
+		dontmanage.ui.form.on(d, {
+			onload: function(frm) {
+				if (!frm.doc.service_level_agreement)
+					return;
 
-			$.each(r.message, function(_i, d) {
-				dontmanage.ui.form.on(d, {
-					onload: function(frm) {
-						if (!frm.doc.service_level_agreement)
-							return;
-
-						dontmanage.call({
-							method: 'dontmanageerp.support.doctype.service_level_agreement.service_level_agreement.get_service_level_agreement_filters',
-							args: {
-								doctype: frm.doc.doctype,
-								name: frm.doc.service_level_agreement,
-								customer: frm.doc.customer
-							},
-							callback: function (r) {
-								if (r && r.message) {
-									frm.set_query('priority', function() {
-										return {
-											filters: {
-												'name': ['in', r.message.priority],
-											}
-										};
-									});
-									frm.set_query('service_level_agreement', function() {
-										return {
-											filters: {
-												'name': ['in', r.message.service_level_agreements],
-											}
-										};
-									});
-								}
-							}
-						});
+				dontmanage.call({
+					method: 'dontmanageerp.support.doctype.service_level_agreement.service_level_agreement.get_service_level_agreement_filters',
+					args: {
+						doctype: frm.doc.doctype,
+						name: frm.doc.service_level_agreement,
+						customer: frm.doc.customer
 					},
-
-					refresh: function(frm) {
-						if (frm.doc.status !== 'Closed' && frm.doc.service_level_agreement
-							&& ['First Response Due', 'Resolution Due'].includes(frm.doc.agreement_status)) {
-							dontmanage.call({
-								'method': 'dontmanage.client.get',
-								args: {
-									doctype: 'Service Level Agreement',
-									name: frm.doc.service_level_agreement
-								},
-								callback: function(data) {
-									let statuses = data.message.pause_sla_on;
-									const hold_statuses = [];
-									$.each(statuses, (_i, entry) => {
-										hold_statuses.push(entry.status);
-									});
-									if (hold_statuses.includes(frm.doc.status)) {
-										frm.dashboard.clear_headline();
-										let message = {'indicator': 'orange', 'msg': __('SLA is on hold since {0}', [moment(frm.doc.on_hold_since).fromNow(true)])};
-										frm.dashboard.set_headline_alert(
-											'<div class="row">' +
-												'<div class="col-xs-12">' +
-													'<span class="indicator whitespace-nowrap '+ message.indicator +'"><span>'+ message.msg +'</span></span> ' +
-												'</div>' +
-											'</div>'
-										);
-									} else {
-										set_time_to_resolve_and_response(frm, data.message.apply_sla_for_resolution);
+					callback: function (r) {
+						if (r && r.message) {
+							frm.set_query('priority', function() {
+								return {
+									filters: {
+										'name': ['in', r.message.priority],
 									}
-								}
+								};
 							});
-						} else if (frm.doc.service_level_agreement) {
-							frm.dashboard.clear_headline();
-
-							let agreement_status = (frm.doc.agreement_status == 'Fulfilled') ?
-								{'indicator': 'green', 'msg': 'Service Level Agreement has been fulfilled'} :
-								{'indicator': 'red', 'msg': 'Service Level Agreement Failed'};
-
-							frm.dashboard.set_headline_alert(
-								'<div class="row">' +
-									'<div class="col-xs-12">' +
-										'<span class="indicator whitespace-nowrap '+ agreement_status.indicator +'"><span class="hidden-xs">'+ agreement_status.msg +'</span></span> ' +
-									'</div>' +
-								'</div>'
-							);
+							frm.set_query('service_level_agreement', function() {
+								return {
+									filters: {
+										'name': ['in', r.message.service_level_agreements],
+									}
+								};
+							});
 						}
-					},
+					}
 				});
-			});
-		}
+			},
+
+			refresh: function(frm) {
+				if (frm.doc.status !== 'Closed' && frm.doc.service_level_agreement
+					&& ['First Response Due', 'Resolution Due'].includes(frm.doc.agreement_status)) {
+					dontmanage.call({
+						'method': 'dontmanage.client.get',
+						args: {
+							doctype: 'Service Level Agreement',
+							name: frm.doc.service_level_agreement
+						},
+						callback: function(data) {
+							let statuses = data.message.pause_sla_on;
+							const hold_statuses = [];
+							$.each(statuses, (_i, entry) => {
+								hold_statuses.push(entry.status);
+							});
+							if (hold_statuses.includes(frm.doc.status)) {
+								frm.dashboard.clear_headline();
+								let message = {'indicator': 'orange', 'msg': __('SLA is on hold since {0}', [moment(frm.doc.on_hold_since).fromNow(true)])};
+								frm.dashboard.set_headline_alert(
+									'<div class="row">' +
+										'<div class="col-xs-12">' +
+											'<span class="indicator whitespace-nowrap '+ message.indicator +'"><span>'+ message.msg +'</span></span> ' +
+										'</div>' +
+									'</div>'
+								);
+							} else {
+								set_time_to_resolve_and_response(frm, data.message.apply_sla_for_resolution);
+							}
+						}
+					});
+				} else if (frm.doc.service_level_agreement) {
+					frm.dashboard.clear_headline();
+
+					let agreement_status = (frm.doc.agreement_status == 'Fulfilled') ?
+						{'indicator': 'green', 'msg': 'Service Level Agreement has been fulfilled'} :
+						{'indicator': 'red', 'msg': 'Service Level Agreement Failed'};
+
+					frm.dashboard.set_headline_alert(
+						'<div class="row">' +
+							'<div class="col-xs-12">' +
+								'<span class="indicator whitespace-nowrap '+ agreement_status.indicator +'"><span class="hidden-xs">'+ agreement_status.msg +'</span></span> ' +
+							'</div>' +
+						'</div>'
+					);
+				}
+			},
+		});
 	});
 });
 
@@ -955,7 +1089,7 @@ function set_time_to_resolve_and_response(frm, apply_sla_for_resolution) {
 }
 
 function get_time_left(timestamp, agreement_status) {
-	const diff = moment(timestamp).diff(moment());
+	const diff = moment(timestamp).diff(dontmanage.datetime.system_datetime(true));
 	const diff_display = diff >= 44500 ? moment.duration(diff).humanize() : 'Failed';
 	let indicator = (diff_display == 'Failed' && agreement_status != 'Fulfilled') ? 'red' : 'green';
 	return {'diff_display': diff_display, 'indicator': indicator};

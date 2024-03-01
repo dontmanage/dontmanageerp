@@ -54,7 +54,7 @@ def create_charts(
 							"account_number": account_number,
 							"account_type": child.get("account_type"),
 							"account_currency": child.get("account_currency")
-							or dontmanage.db.get_value("Company", company, "default_currency"),
+							or dontmanage.get_cached_value("Company", company, "default_currency"),
 							"tax_rate": child.get("tax_rate"),
 						}
 					)
@@ -159,7 +159,7 @@ def get_charts_for_country(country, with_standard=False):
 			) or dontmanage.local.flags.allow_unverified_charts:
 				charts.append(content["name"])
 
-	country_code = dontmanage.db.get_value("Country", country, "code")
+	country_code = dontmanage.get_cached_value("Country", country, "code")
 	if country_code:
 		folders = ("verified",)
 		if dontmanage.local.flags.allow_unverified_charts:

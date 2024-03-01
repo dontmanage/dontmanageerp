@@ -6,7 +6,7 @@ import dontmanage
 from dontmanage import _, scrub
 from dontmanage.model.document import Document
 from dontmanage.utils import flt, nowdate
-from dontmanage.utils.background_jobs import enqueue
+from dontmanage.utils.background_jobs import enqueue, is_job_enqueued
 
 from dontmanageerp.accounts.doctype.accounting_dimension.accounting_dimension import (
 	get_accounting_dimensions,
@@ -14,6 +14,25 @@ from dontmanageerp.accounts.doctype.accounting_dimension.accounting_dimension im
 
 
 class OpeningInvoiceCreationTool(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.opening_invoice_creation_tool_item.opening_invoice_creation_tool_item import (
+			OpeningInvoiceCreationToolItem,
+		)
+
+		company: DF.Link
+		cost_center: DF.Link | None
+		create_missing_party: DF.Check
+		invoice_type: DF.Literal["Sales", "Purchase"]
+		invoices: DF.Table[OpeningInvoiceCreationToolItem]
+	# end: auto-generated types
+
 	def onload(self):
 		"""Load the Opening Invoice summary"""
 		summary, max_count = self.get_opening_invoice_summary()
@@ -207,20 +226,20 @@ class OpeningInvoiceCreationTool(Document):
 		if len(invoices) < 50:
 			return start_import(invoices)
 		else:
-			from dontmanage.core.page.background_jobs.background_jobs import get_info
 			from dontmanage.utils.scheduler import is_scheduler_inactive
 
 			if is_scheduler_inactive() and not dontmanage.flags.in_test:
 				dontmanage.throw(_("Scheduler is inactive. Cannot import data."), title=_("Scheduler Inactive"))
 
-			enqueued_jobs = [d.get("job_name") for d in get_info()]
-			if self.name not in enqueued_jobs:
+			job_id = f"opening_invoice::{self.name}"
+
+			if not is_job_enqueued(job_id):
 				enqueue(
 					start_import,
 					queue="default",
 					timeout=6000,
 					event="opening_invoice_creation",
-					job_name=self.name,
+					job_id=job_id,
 					invoices=invoices,
 					now=dontmanage.conf.developer_mode or dontmanage.flags.in_test,
 				)

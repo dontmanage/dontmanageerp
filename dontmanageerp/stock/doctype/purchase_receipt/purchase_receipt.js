@@ -1,9 +1,11 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
 
-{% include 'dontmanageerp/public/js/controllers/buying.js' %};
-
 dontmanage.provide("dontmanageerp.stock");
+
+dontmanageerp.accounts.taxes.setup_tax_filters("Purchase Taxes and Charges");
+dontmanageerp.accounts.taxes.setup_tax_validations("Purchase Receipt");
+dontmanageerp.buying.setup_buying_controller();
 
 dontmanage.ui.form.on("Purchase Receipt", {
 	setup: (frm) => {
@@ -35,12 +37,26 @@ dontmanage.ui.form.on("Purchase Receipt", {
 			}
 		});
 
+		frm.set_query("wip_composite_asset", "items", function() {
+			return {
+				filters: {'is_composite_asset': 1, 'docstatus': 0 }
+			}
+		});
+
 		frm.set_query("taxes_and_charges", function() {
 			return {
 				filters: {'company': frm.doc.company }
 			}
 		});
 
+		frm.set_query("subcontracting_receipt", function() {
+			return {
+				filters: {
+					'docstatus': 1,
+					'supplier': frm.doc.supplier,
+				}
+			}
+		});
 	},
 	onload: function(frm) {
 		dontmanageerp.queries.setup_queries(frm, "Warehouse", function() {
@@ -70,6 +86,20 @@ dontmanage.ui.form.on("Purchase Receipt", {
 					frm: cur_frm,
 				})
 			}, __('Create'));
+		}
+
+		if (frm.doc.docstatus === 0) {
+			if (!frm.doc.is_return) {
+				dontmanage.db.get_single_value("Buying Settings", "maintain_same_rate").then((value) => {
+					if (value) {
+						frm.doc.items.forEach((item) => {
+							frm.fields_dict.items.grid.update_docfield_property(
+								"rate", "read_only", (item.purchase_order && item.purchase_order_item)
+							);
+						});
+					}
+				});
+			}
 		}
 
 		frm.events.add_custom_buttons(frm);
@@ -106,6 +136,20 @@ dontmanage.ui.form.on("Purchase Receipt", {
 		dontmanageerp.accounts.dimensions.update_dimension(frm, frm.doctype);
 	},
 
+	subcontracting_receipt: (frm) => {
+		if (frm.doc.is_subcontracted === 1 && frm.doc.is_old_subcontracting_flow === 0 && frm.doc.subcontracting_receipt) {
+			frm.set_value('items', null);
+
+			dontmanageerp.utils.map_current_doc({
+				method: 'dontmanageerp.subcontracting.doctype.subcontracting_receipt.subcontracting_receipt.make_purchase_receipt',
+				source_name: frm.doc.subcontracting_receipt,
+				target_doc: frm,
+				freeze: true,
+				freeze_message: __('Mapping Purchase Receipt ...'),
+			});
+		}
+	},
+
 	toggle_display_account_head: function(frm) {
 		var enabled = dontmanageerp.is_perpetual_inventory_enabled(frm.doc.company)
 		frm.fields_dict["items"].grid.set_column_disp(["cost_center"], enabled);
@@ -121,6 +165,10 @@ dontmanageerp.stock.PurchaseReceiptController = class PurchaseReceiptController 
 	refresh() {
 		var me = this;
 		super.refresh();
+
+		dontmanageerp.accounts.ledger_preview.show_accounting_ledger_preview(this.frm);
+		dontmanageerp.accounts.ledger_preview.show_stock_ledger_preview(this.frm);
+
 		if(this.frm.doc.docstatus > 0) {
 			this.show_stock_ledger();
 			//removed for temporary
@@ -183,12 +231,6 @@ dontmanageerp.stock.PurchaseReceiptController = class PurchaseReceiptController 
 				}
 				cur_frm.add_custom_button(__('Retention Stock Entry'), this.make_retention_stock_entry, __('Create'));
 
-				if(!this.frm.doc.auto_repeat) {
-					cur_frm.add_custom_button(__('Subscription'), function() {
-						dontmanageerp.utils.make_subscription(me.frm.doc.doctype, me.frm.doc.name)
-					}, __('Create'))
-				}
-
 				cur_frm.page.set_inner_btn_group_as_primary(__('Create'));
 			}
 		}
@@ -209,10 +251,43 @@ dontmanageerp.stock.PurchaseReceiptController = class PurchaseReceiptController 
 	}
 
 	make_purchase_return() {
-		dontmanage.model.open_mapped_doc({
-			method: "dontmanageerp.stock.doctype.purchase_receipt.purchase_receipt.make_purchase_return",
-			frm: cur_frm
+		let me = this;
+
+		let has_rejected_items = cur_frm.doc.items.filter((item) => {
+			if (item.rejected_qty > 0) {
+				return true;
+			}
 		})
+
+		if (has_rejected_items && has_rejected_items.length > 0) {
+			dontmanage.prompt([
+				{
+					label: __("Return Qty from Rejected Warehouse"),
+					fieldtype: "Check",
+					fieldname: "return_for_rejected_warehouse",
+					default: 1
+				},
+			], function(values){
+				if (values.return_for_rejected_warehouse) {
+					dontmanage.call({
+						method: "dontmanageerp.stock.doctype.purchase_receipt.purchase_receipt.make_purchase_return_against_rejected_warehouse",
+						args: {
+							source_name: cur_frm.doc.name
+						},
+						callback: function(r) {
+							if(r.message) {
+								dontmanage.model.sync(r.message);
+								dontmanage.set_route("Form", r.message.doctype, r.message.name);
+							}
+						}
+					})
+				} else {
+					cur_frm.cscript._make_purchase_return();
+				}
+			}, __("Return Qty"), __("Make Return Entry"));
+		} else {
+			cur_frm.cscript._make_purchase_return();
+		}
 	}
 
 	close_purchase_receipt() {
@@ -321,6 +396,13 @@ dontmanage.ui.form.on('Purchase Receipt Item', {
 		validate_sample_quantity(frm, cdt, cdn);
 	},
 });
+
+cur_frm.cscript._make_purchase_return = function() {
+	dontmanage.model.open_mapped_doc({
+		method: "dontmanageerp.stock.doctype.purchase_receipt.purchase_receipt.make_purchase_return",
+		frm: cur_frm
+	});
+}
 
 cur_frm.cscript['Make Stock Entry'] = function() {
 	dontmanage.model.open_mapped_doc({

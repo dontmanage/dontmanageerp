@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Sales Order Analysis"] = {
 	"filters": [
@@ -43,6 +43,12 @@ dontmanage.query_reports["Sales Order Analysis"] = {
 					filters: { "docstatus": 1 }
 				}
 			}
+		},
+		{
+			"fieldname": "warehouse",
+			"label": __("Warehouse"),
+			"fieldtype": "Link",
+			"options": "Warehouse"
 		},
 		{
 			"fieldname": "status",

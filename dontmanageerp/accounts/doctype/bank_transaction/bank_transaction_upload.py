@@ -74,7 +74,7 @@ def get_header_mapping(columns, bank_account):
 
 
 def get_bank_mapping(bank_account):
-	bank_name = dontmanage.db.get_value("Bank Account", bank_account, "bank")
+	bank_name = dontmanage.get_cached_value("Bank Account", bank_account, "bank")
 	bank = dontmanage.get_doc("Bank", bank_name)
 
 	mapping = {row.file_field: row.bank_transaction_field for row in bank.bank_transaction_mapping}

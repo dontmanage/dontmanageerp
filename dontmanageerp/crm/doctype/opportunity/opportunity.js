@@ -1,10 +1,10 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
-
-{% include 'dontmanageerp/selling/sales_common.js' %}
 dontmanage.provide("dontmanageerp.crm");
+dontmanageerp.pre_sales.set_as_lost("Opportunity");
+dontmanageerp.sales_common.setup_selling_controller();
 
-cur_frm.email_field = "contact_email";
+
 dontmanage.ui.form.on("Opportunity", {
 	setup: function(frm) {
 		frm.custom_make_buttons = {
@@ -19,6 +19,8 @@ dontmanage.ui.form.on("Opportunity", {
 				}
 			}
 		});
+
+		frm.email_field = "contact_email";
 	},
 
 	validate: function(frm) {
@@ -44,10 +46,6 @@ dontmanage.ui.form.on("Opportunity", {
 				frm: frm
 			});
 		}
-	},
-
-	onload_post_render: function(frm) {
-		frm.get_field("items").grid.set_multiple_add("item_code", "qty");
 	},
 
 	status:function(frm){
@@ -252,13 +250,13 @@ dontmanageerp.crm.Opportunity = class Opportunity extends dontmanage.ui.form.Con
 	onload() {
 
 		if(!this.frm.doc.status) {
-			frm.set_value('status', 'Open');
+			this.frm.set_value('status', 'Open');
 		}
 		if(!this.frm.doc.company && dontmanage.defaults.get_user_default("Company")) {
-			frm.set_value('company', dontmanage.defaults.get_user_default("Company"));
+			this.frm.set_value('company', dontmanage.defaults.get_user_default("Company"));
 		}
 		if(!this.frm.doc.currency) {
-			frm.set_value('currency', dontmanage.defaults.get_user_default("Currency"));
+			this.frm.set_value('currency', dontmanage.defaults.get_user_default("Currency"));
 		}
 
 		this.setup_queries();

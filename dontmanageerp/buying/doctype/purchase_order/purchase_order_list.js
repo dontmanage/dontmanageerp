@@ -43,7 +43,7 @@ dontmanage.listview_settings['Purchase Order'] = {
 		});
 
 		listview.page.add_action_item(__("Advance Payment"), ()=>{
-			dontmanageerp.bulk_transaction_processing.create(listview, "Purchase Order", "Advance Payment");
+			dontmanageerp.bulk_transaction_processing.create(listview, "Purchase Order", "Payment Entry");
 		});
 
 	}

@@ -44,11 +44,6 @@ dontmanage.query_reports["Supplier Quotation Comparison"] = {
 						}
 					}
 				}
-				else {
-					return {
-						filters: { "disabled": 0 }
-					}
-				}
 			}
 		},
 		{

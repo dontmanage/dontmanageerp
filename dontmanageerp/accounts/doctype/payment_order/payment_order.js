@@ -124,7 +124,7 @@ dontmanage.ui.form.on('Payment Order', {
 			return dontmanage.call({
 				method: "dontmanageerp.accounts.doctype.payment_order.payment_order.make_payment_records",
 				args: {
-					"name": me.frm.doc.name,
+					"name": frm.doc.name,
 					"supplier": args.supplier,
 					"mode_of_payment": args.mode_of_payment
 				},

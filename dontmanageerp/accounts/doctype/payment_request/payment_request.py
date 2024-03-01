@@ -1,13 +1,9 @@
-# Copyright (c) 2015, DontManage and contributors
-# For license information, please see license.txt
-
-
 import json
 
 import dontmanage
 from dontmanage import _
 from dontmanage.model.document import Document
-from dontmanage.utils import flt, get_url, nowdate
+from dontmanage.utils import flt, nowdate
 from dontmanage.utils.background_jobs import enqueue
 
 from dontmanageerp.accounts.doctype.accounting_dimension.accounting_dimension import (
@@ -20,7 +16,6 @@ from dontmanageerp.accounts.doctype.payment_entry.payment_entry import (
 from dontmanageerp.accounts.doctype.subscription_plan.subscription_plan import get_plan_rate
 from dontmanageerp.accounts.party import get_party_account, get_party_bank_account
 from dontmanageerp.accounts.utils import get_account_currency
-from dontmanageerp.dontmanageerp_integrations.stripe_integration import create_stripe_subscription
 from dontmanageerp.utilities import payment_app_import_guard
 
 
@@ -32,6 +27,65 @@ def _get_payment_gateway_controller(*args, **kwargs):
 
 
 class PaymentRequest(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.subscription_plan_detail.subscription_plan_detail import (
+			SubscriptionPlanDetail,
+		)
+
+		account: DF.ReadOnly | None
+		amended_from: DF.Link | None
+		bank: DF.Link | None
+		bank_account: DF.Link | None
+		bank_account_no: DF.ReadOnly | None
+		branch_code: DF.ReadOnly | None
+		cost_center: DF.Link | None
+		currency: DF.Link | None
+		email_to: DF.Data | None
+		grand_total: DF.Currency
+		iban: DF.ReadOnly | None
+		is_a_subscription: DF.Check
+		make_sales_invoice: DF.Check
+		message: DF.Text | None
+		mode_of_payment: DF.Link | None
+		mute_email: DF.Check
+		naming_series: DF.Literal["ACC-PRQ-.YYYY.-"]
+		party: DF.DynamicLink | None
+		party_type: DF.Link | None
+		payment_account: DF.ReadOnly | None
+		payment_channel: DF.Literal["", "Email", "Phone"]
+		payment_gateway: DF.ReadOnly | None
+		payment_gateway_account: DF.Link | None
+		payment_order: DF.Link | None
+		payment_request_type: DF.Literal["Outward", "Inward"]
+		payment_url: DF.Data | None
+		print_format: DF.Literal
+		project: DF.Link | None
+		reference_doctype: DF.Link | None
+		reference_name: DF.DynamicLink | None
+		status: DF.Literal[
+			"",
+			"Draft",
+			"Requested",
+			"Initiated",
+			"Partially Paid",
+			"Payment Ordered",
+			"Paid",
+			"Failed",
+			"Cancelled",
+		]
+		subject: DF.Data | None
+		subscription_plans: DF.Table[SubscriptionPlanDetail]
+		swift_number: DF.ReadOnly | None
+		transaction_date: DF.Date | None
+	# end: auto-generated types
+
 	def validate(self):
 		if self.get("__islocal"):
 			self.status = "Draft"
@@ -62,7 +116,7 @@ class PaymentRequest(Document):
 
 	def validate_currency(self):
 		ref_doc = dontmanage.get_doc(self.reference_doctype, self.reference_name)
-		if self.payment_account and ref_doc.currency != dontmanage.db.get_value(
+		if self.payment_account and ref_doc.currency != dontmanage.get_cached_value(
 			"Account", self.payment_account, "account_currency"
 		):
 			dontmanage.throw(_("Transaction currency must be same as Payment Gateway currency"))
@@ -249,7 +303,7 @@ class PaymentRequest(Document):
 		if (
 			party_account_currency == ref_doc.company_currency and party_account_currency != self.currency
 		):
-			party_amount = ref_doc.base_grand_total
+			party_amount = ref_doc.get("base_rounded_total") or ref_doc.get("base_grand_total")
 		else:
 			party_amount = self.grand_total
 
@@ -364,35 +418,11 @@ class PaymentRequest(Document):
 	def get_payment_success_url(self):
 		return self.payment_success_url
 
-	def on_payment_authorized(self, status=None):
-		if not status:
-			return
-
-		shopping_cart_settings = dontmanage.get_doc("E Commerce Settings")
-
-		if status in ["Authorized", "Completed"]:
-			redirect_to = None
-			self.set_as_paid()
-
-			# if shopping cart enabled and in session
-			if (
-				shopping_cart_settings.enabled
-				and hasattr(dontmanage.local, "session")
-				and dontmanage.local.session.user != "Guest"
-			) and self.payment_channel != "Phone":
-
-				success_url = shopping_cart_settings.payment_success_url
-				if success_url:
-					redirect_to = ({"Orders": "/orders", "Invoices": "/invoices", "My Account": "/me"}).get(
-						success_url, "/me"
-					)
-				else:
-					redirect_to = get_url("/orders/{0}".format(self.reference_name))
-
-			return redirect_to
-
 	def create_subscription(self, payment_provider, gateway_controller, data):
 		if payment_provider == "stripe":
+			with payment_app_import_guard():
+				from payments.payment_gateways.stripe_integration import create_stripe_subscription
+
 			return create_stripe_subscription(gateway_controller, data)
 
 
@@ -497,10 +527,16 @@ def get_amount(ref_doc, payment_account=None):
 	if dt in ["Sales Order", "Purchase Order"]:
 		grand_total = flt(ref_doc.rounded_total) or flt(ref_doc.grand_total)
 	elif dt in ["Sales Invoice", "Purchase Invoice"]:
-		if ref_doc.party_account_currency == ref_doc.currency:
-			grand_total = flt(ref_doc.outstanding_amount)
-		else:
-			grand_total = flt(ref_doc.outstanding_amount) / ref_doc.conversion_rate
+		if not ref_doc.get("is_pos"):
+			if ref_doc.party_account_currency == ref_doc.currency:
+				grand_total = flt(ref_doc.outstanding_amount)
+			else:
+				grand_total = flt(ref_doc.outstanding_amount) / ref_doc.conversion_rate
+		elif dt == "Sales Invoice":
+			for pay in ref_doc.payments:
+				if pay.type == "Phone" and pay.account == payment_account:
+					grand_total = pay.amount
+					break
 	elif dt == "POS Invoice":
 		for pay in ref_doc.payments:
 			if pay.type == "Phone" and pay.account == payment_account:
@@ -538,13 +574,12 @@ def get_existing_payment_request_amount(ref_dt, ref_dn):
 
 
 def get_gateway_details(args):  # nosemgrep
-	"""return gateway and payment account of default payment gateway"""
-	if args.get("payment_gateway_account"):
-		return get_payment_gateway_account(args.get("payment_gateway_account"))
-
-	if args.order_type == "Shopping Cart":
-		payment_gateway_account = dontmanage.get_doc("E Commerce Settings").payment_gateway_account
-		return get_payment_gateway_account(payment_gateway_account)
+	"""
+	Return gateway and payment account of default payment gateway
+	"""
+	gateway_account = args.get("payment_gateway_account", {"is_default": 1})
+	if gateway_account:
+		return get_payment_gateway_account(gateway_account)
 
 	gateway_account = get_payment_gateway_account({"is_default": 1})
 

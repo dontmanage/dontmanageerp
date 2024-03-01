@@ -9,6 +9,21 @@ from dontmanage.utils import cint, flt
 
 
 class Routing(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.manufacturing.doctype.bom_operation.bom_operation import BOMOperation
+
+		disabled: DF.Check
+		operations: DF.Table[BOMOperation]
+		routing_name: DF.Data | None
+	# end: auto-generated types
+
 	def validate(self):
 		self.calculate_operating_cost()
 		self.set_routing_id()

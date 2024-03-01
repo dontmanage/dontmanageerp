@@ -1,8 +1,10 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
 
-
-{% include 'dontmanageerp/selling/sales_common.js' %}
+dontmanageerp.accounts.taxes.setup_tax_validations("Sales Taxes and Charges Template");
+dontmanageerp.accounts.taxes.setup_tax_filters("Sales Taxes and Charges");
+dontmanageerp.pre_sales.set_as_lost("Quotation");
+dontmanageerp.sales_common.setup_selling_controller();
 
 dontmanage.ui.form.on('Quotation', {
 	setup: function(frm) {
@@ -13,7 +15,7 @@ dontmanage.ui.form.on('Quotation', {
 		frm.set_query("quotation_to", function() {
 			return{
 				"filters": {
-					"name": ["in", ["Customer", "Lead"]],
+					"name": ["in", ["Customer", "Lead", "Prospect"]],
 				}
 			}
 		});
@@ -34,11 +36,34 @@ dontmanage.ui.form.on('Quotation', {
 				}
 			};
 		});
+
+		frm.set_query("serial_and_batch_bundle", "packed_items", (doc, cdt, cdn) => {
+			let row = locals[cdt][cdn];
+			return {
+				filters: {
+					'item_code': row.item_code,
+					'voucher_type': doc.doctype,
+					'voucher_no': ["in", [doc.name, ""]],
+					'is_cancelled': 0,
+				}
+			}
+		});
 	},
 
 	refresh: function(frm) {
 		frm.trigger("set_label");
 		frm.trigger("set_dynamic_field_label");
+
+		let sbb_field = frm.get_docfield('packed_items', 'serial_and_batch_bundle');
+		if (sbb_field) {
+			sbb_field.get_route_options_for_new_doc = (row) => {
+				return {
+					'item_code': row.doc.item_code,
+					'warehouse': row.doc.warehouse,
+					'voucher_type': frm.doc.doctype,
+				}
+			};
+		}
 	},
 
 	quotation_to: function(frm) {
@@ -101,12 +126,6 @@ dontmanageerp.selling.QuotationController = class QuotationController extends do
 					});
 				}
 
-			if(!doc.auto_repeat) {
-				cur_frm.add_custom_button(__('Subscription'), function() {
-					dontmanageerp.utils.make_subscription(doc.doctype, doc.name)
-				}, __('Create'))
-			}
-
 			cur_frm.page.set_inner_btn_group_as_primary(__('Create'));
 		}
 
@@ -160,19 +179,16 @@ dontmanageerp.selling.QuotationController = class QuotationController extends do
 	}
 
 	set_dynamic_field_label(){
-		if (this.frm.doc.quotation_to == "Customer")
-		{
+		if (this.frm.doc.quotation_to == "Customer") {
 			this.frm.set_df_property("party_name", "label", "Customer");
 			this.frm.fields_dict.party_name.get_query = null;
-		}
-
-		if (this.frm.doc.quotation_to == "Lead")
-		{
+		} else if (this.frm.doc.quotation_to == "Lead") {
 			this.frm.set_df_property("party_name", "label", "Lead");
-
 			this.frm.fields_dict.party_name.get_query = function() {
 				return{	query: "dontmanageerp.controllers.queries.lead_query" }
 			}
+		} else if (this.frm.doc.quotation_to == "Prospect") {
+			this.frm.set_df_property("party_name", "label", "Prospect");
 		}
 	}
 
@@ -304,6 +320,7 @@ dontmanageerp.selling.QuotationController = class QuotationController extends do
 					fieldname: "alternative_items",
 					fieldtype: "Table",
 					cannot_add_rows: true,
+					cannot_delete_rows: true,
 					in_place_edit: true,
 					reqd: 1,
 					data: this.data,
@@ -330,7 +347,7 @@ dontmanageerp.selling.QuotationController = class QuotationController extends do
 		dialog.fields_dict.info.$wrapper.html(
 			`<p class="small text-muted">
 				<span class="indicator yellow"></span>
-				Alternative Items
+				${__("Alternative Items")}
 			</p>`
 		)
 		dialog.show();

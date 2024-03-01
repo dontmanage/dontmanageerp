@@ -20,5 +20,11 @@ dontmanage.ui.form.on('Accounting Period', {
 				}
 			});
 		}
+
+		frm.set_query("document_type", "closed_documents", () => {
+			return {
+				query: "dontmanageerp.controllers.queries.get_doctypes_for_closing",
+			}
+		});
 	}
 });

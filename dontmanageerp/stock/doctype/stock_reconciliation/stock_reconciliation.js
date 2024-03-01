@@ -5,6 +5,10 @@ dontmanage.provide("dontmanageerp.stock");
 dontmanage.provide("dontmanageerp.accounts.dimensions");
 
 dontmanage.ui.form.on("Stock Reconciliation", {
+	setup(frm) {
+		frm.ignore_doctypes_on_cancel_all = ['Serial and Batch Bundle'];
+	},
+
 	onload: function(frm) {
 		frm.add_fetch("item_code", "item_name", "item_name");
 
@@ -26,6 +30,29 @@ dontmanage.ui.form.on("Stock Reconciliation", {
 			};
 		});
 
+		frm.set_query("serial_and_batch_bundle", "items", (doc, cdt, cdn) => {
+			let row = locals[cdt][cdn];
+			return {
+				filters: {
+					'item_code': row.item_code,
+					'voucher_type': doc.doctype,
+					'voucher_no': ["in", [doc.name, ""]],
+					'is_cancelled': 0,
+				}
+			}
+		});
+
+		let sbb_field = frm.get_docfield('items', 'serial_and_batch_bundle');
+		if (sbb_field) {
+			sbb_field.get_route_options_for_new_doc = (row) => {
+				return {
+					'item_code': row.doc.item_code,
+					'warehouse': row.doc.warehouse,
+					'voucher_type': frm.doc.doctype,
+				}
+			};
+		}
+
 		if (frm.doc.company) {
 			dontmanageerp.queries.setup_queries(frm, "Warehouse", function() {
 				return dontmanageerp.queries.warehouse(frm.doc);
@@ -40,6 +67,7 @@ dontmanage.ui.form.on("Stock Reconciliation", {
 	},
 
 	company: function(frm) {
+		frm.trigger("toggle_display_account_head");
 		dontmanageerp.accounts.dimensions.update_dimension(frm, frm.doctype);
 	},
 
@@ -95,13 +123,6 @@ dontmanage.ui.form.on("Stock Reconciliation", {
 				fieldname: "item_code",
 				fieldtype: "Link",
 				options: "Item",
-				"get_query": function() {
-					return {
-						"filters": {
-							"disabled": 0,
-						}
-					};
-				}
 			},
 			{
 				label: __("Ignore Empty Stock"),
@@ -177,6 +198,7 @@ dontmanage.ui.form.on("Stock Reconciliation", {
 					dontmanage.model.set_value(cdt, cdn, "current_amount", r.message.rate * r.message.qty);
 					dontmanage.model.set_value(cdt, cdn, "amount", row.qty * row.valuation_rate);
 					dontmanage.model.set_value(cdt, cdn, "current_serial_no", r.message.serial_nos);
+					dontmanage.model.set_value(cdt, cdn, "use_serial_batch_fields", r.message.use_serial_batch_fields);
 
 					if (frm.doc.purpose == "Stock Reconciliation" && !frm.doc.scan_mode) {
 						dontmanage.model.set_value(cdt, cdn, "serial_no", r.message.serial_nos);
@@ -188,14 +210,11 @@ dontmanage.ui.form.on("Stock Reconciliation", {
 
 	set_amount_quantity: function(doc, cdt, cdn) {
 		var d = dontmanage.model.get_doc(cdt, cdn);
-		if (d.qty & d.valuation_rate) {
+		if (d.qty && d.valuation_rate) {
 			dontmanage.model.set_value(cdt, cdn, "amount", flt(d.qty) * flt(d.valuation_rate));
 			dontmanage.model.set_value(cdt, cdn, "quantity_difference", flt(d.qty) - flt(d.current_qty));
 			dontmanage.model.set_value(cdt, cdn, "amount_difference", flt(d.amount) - flt(d.current_amount));
 		}
-	},
-	company: function(frm) {
-		frm.trigger("toggle_display_account_head");
 	},
 	toggle_display_account_head: function(frm) {
 		frm.toggle_display(['expense_account', 'cost_center'],
@@ -270,6 +289,10 @@ dontmanage.ui.form.on("Stock Reconciliation Item", {
 		}
 	},
 
+	add_serial_batch_bundle(frm, cdt, cdn) {
+		dontmanageerp.utils.pick_serial_and_batch_bundle(frm, cdt, cdn, "Inward");
+	}
+
 });
 
 dontmanageerp.stock.StockReconciliation = class StockReconciliation extends dontmanageerp.stock.StockController {
@@ -306,6 +329,7 @@ dontmanageerp.stock.StockReconciliation = class StockReconciliation extends dont
 	refresh() {
 		if(this.frm.doc.docstatus > 0) {
 			this.show_stock_ledger();
+			dontmanageerp.utils.view_serial_batch_nos(this.frm);
 			if (dontmanageerp.is_perpetual_inventory_enabled(this.frm.doc.company)) {
 				this.show_general_ledger();
 			}

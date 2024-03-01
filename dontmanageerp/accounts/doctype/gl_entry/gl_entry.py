@@ -13,21 +13,58 @@ import dontmanageerp
 from dontmanageerp.accounts.doctype.accounting_dimension.accounting_dimension import (
 	get_checks_for_pl_and_bs_accounts,
 )
-from dontmanageerp.accounts.doctype.accounting_dimension_filter.accounting_dimension_filter import (
-	get_dimension_filter_map,
-)
 from dontmanageerp.accounts.party import validate_party_frozen_disabled, validate_party_gle_currency
 from dontmanageerp.accounts.utils import get_account_currency, get_fiscal_year
-from dontmanageerp.exceptions import (
-	InvalidAccountCurrency,
-	InvalidAccountDimensionError,
-	MandatoryAccountDimensionError,
-)
+from dontmanageerp.exceptions import InvalidAccountCurrency
 
 exclude_from_linked_with = True
 
 
 class GLEntry(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		account: DF.Link | None
+		account_currency: DF.Link | None
+		against: DF.Text | None
+		against_link: DF.DynamicLink | None
+		against_type: DF.Link | None
+		against_voucher: DF.DynamicLink | None
+		against_voucher_type: DF.Link | None
+		company: DF.Link | None
+		cost_center: DF.Link | None
+		credit: DF.Currency
+		credit_in_account_currency: DF.Currency
+		credit_in_transaction_currency: DF.Currency
+		debit: DF.Currency
+		debit_in_account_currency: DF.Currency
+		debit_in_transaction_currency: DF.Currency
+		due_date: DF.Date | None
+		finance_book: DF.Link | None
+		fiscal_year: DF.Link | None
+		is_advance: DF.Literal["No", "Yes"]
+		is_cancelled: DF.Check
+		is_opening: DF.Literal["No", "Yes"]
+		party: DF.DynamicLink | None
+		party_type: DF.Link | None
+		posting_date: DF.Date | None
+		project: DF.Link | None
+		remarks: DF.Text | None
+		to_rename: DF.Check
+		transaction_currency: DF.Link | None
+		transaction_date: DF.Date | None
+		transaction_exchange_rate: DF.Float
+		voucher_detail_no: DF.Data | None
+		voucher_no: DF.DynamicLink | None
+		voucher_subtype: DF.SmallText | None
+		voucher_type: DF.Link | None
+	# end: auto-generated types
+
 	def autoname(self):
 		"""
 		Temporarily name doc for fast insertion
@@ -54,11 +91,17 @@ class GLEntry(Document):
 		if not self.flags.from_repost and self.voucher_type != "Period Closing Voucher":
 			self.validate_account_details(adv_adj)
 			self.validate_dimensions_for_pl_and_bs()
-			self.validate_allowed_dimensions()
 			validate_balance_type(self.account, adv_adj)
 			validate_frozen_account(self.account, adv_adj)
 
-			if dontmanage.db.get_value("Account", self.account, "account_type") not in [
+			if (
+				self.voucher_type == "Journal Entry"
+				and dontmanage.get_cached_value("Journal Entry", self.voucher_no, "voucher_type")
+				== "Exchange Gain Or Loss"
+			):
+				return
+
+			if dontmanage.get_cached_value("Account", self.account, "account_type") not in [
 				"Receivable",
 				"Payable",
 			]:
@@ -128,7 +171,7 @@ class GLEntry(Document):
 			dontmanage.throw(msg, title=_("Missing Cost Center"))
 
 	def validate_dimensions_for_pl_and_bs(self):
-		account_type = dontmanage.db.get_value("Account", self.account, "report_type")
+		account_type = dontmanage.get_cached_value("Account", self.account, "report_type")
 
 		for dimension in get_checks_for_pl_and_bs_accounts():
 			if (
@@ -157,46 +200,10 @@ class GLEntry(Document):
 						)
 					)
 
-	def validate_allowed_dimensions(self):
-		dimension_filter_map = get_dimension_filter_map()
-		for key, value in dimension_filter_map.items():
-			dimension = key[0]
-			account = key[1]
-
-			if self.account == account:
-				if value["is_mandatory"] and not self.get(dimension):
-					dontmanage.throw(
-						_("{0} is mandatory for account {1}").format(
-							dontmanage.bold(dontmanage.unscrub(dimension)), dontmanage.bold(self.account)
-						),
-						MandatoryAccountDimensionError,
-					)
-
-				if value["allow_or_restrict"] == "Allow":
-					if self.get(dimension) and self.get(dimension) not in value["allowed_dimensions"]:
-						dontmanage.throw(
-							_("Invalid value {0} for {1} against account {2}").format(
-								dontmanage.bold(self.get(dimension)),
-								dontmanage.bold(dontmanage.unscrub(dimension)),
-								dontmanage.bold(self.account),
-							),
-							InvalidAccountDimensionError,
-						)
-				else:
-					if self.get(dimension) and self.get(dimension) in value["allowed_dimensions"]:
-						dontmanage.throw(
-							_("Invalid value {0} for {1} against account {2}").format(
-								dontmanage.bold(self.get(dimension)),
-								dontmanage.bold(dontmanage.unscrub(dimension)),
-								dontmanage.bold(self.account),
-							),
-							InvalidAccountDimensionError,
-						)
-
 	def check_pl_account(self):
 		if (
 			self.is_opening == "Yes"
-			and dontmanage.db.get_value("Account", self.account, "report_type") == "Profit and Loss"
+			and dontmanage.get_cached_value("Account", self.account, "report_type") == "Profit and Loss"
 			and not self.is_cancelled
 		):
 			dontmanage.throw(
@@ -289,7 +296,7 @@ class GLEntry(Document):
 
 def validate_balance_type(account, adv_adj=False):
 	if not adv_adj and account:
-		balance_must_be = dontmanage.db.get_value("Account", account, "balance_must_be")
+		balance_must_be = dontmanage.get_cached_value("Account", account, "balance_must_be")
 		if balance_must_be:
 			balance = dontmanage.db.sql(
 				"""select sum(debit) - sum(credit)

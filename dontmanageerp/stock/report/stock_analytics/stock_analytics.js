@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Stock Analytics"] = {
 	"filters": [
@@ -17,6 +17,7 @@ dontmanage.query_reports["Stock Analytics"] = {
 			fieldtype: "Link",
 			options:"Item",
 			default: "",
+			get_query: () => ({filters: { 'is_stock_item': 1 }}),
 		},
 		{
 			fieldname: "value_quantity",
@@ -93,11 +94,11 @@ dontmanage.query_reports["Stock Analytics"] = {
 			checkboxColumn: true,
 			events: {
 				onCheckRow: function(data) {
-					row_name = data[2].content;
-					row_values = data.slice(7).map(function (column) {
+					let row_name = data[2].content;
+					let row_values = data.slice(7).map(function (column) {
 						return column.content;
 					})
-					entry  = {
+					let entry  = {
 						'name':row_name,
 						'values':row_values
 					}

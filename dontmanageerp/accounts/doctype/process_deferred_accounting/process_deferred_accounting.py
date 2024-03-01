@@ -15,6 +15,23 @@ from dontmanageerp.accounts.general_ledger import make_gl_entries
 
 
 class ProcessDeferredAccounting(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		account: DF.Link | None
+		amended_from: DF.Link | None
+		company: DF.Link
+		end_date: DF.Date
+		posting_date: DF.Date
+		start_date: DF.Date
+		type: DF.Literal["", "Income", "Expense"]
+	# end: auto-generated types
+
 	def validate(self):
 		if self.end_date < self.start_date:
 			dontmanage.throw(_("End date cannot be before start date"))

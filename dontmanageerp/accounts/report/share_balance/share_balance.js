@@ -1,7 +1,7 @@
 // -*- coding: utf-8 -*-
 // Copyright (c) 2017, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Share Balance"] = {
 	"filters": [

@@ -15,8 +15,6 @@ Regional
 DontManageErp Integrations
 Quality Management
 Communication
-Loan Management
 Telephony
 Bulk Transaction
-E-commerce
 Subcontracting

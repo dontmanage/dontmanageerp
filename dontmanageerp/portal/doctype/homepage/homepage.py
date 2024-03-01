@@ -8,30 +8,25 @@ from dontmanage.website.utils import delete_page_cache
 
 
 class Homepage(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		company: DF.Link
+		description: DF.Text
+		hero_image: DF.AttachImage | None
+		hero_section: DF.Link | None
+		hero_section_based_on: DF.Literal["Default", "Slideshow", "Homepage Section"]
+		slideshow: DF.Link | None
+		tag_line: DF.Data
+		title: DF.Data | None
+	# end: auto-generated types
+
 	def validate(self):
 		if not self.description:
 			self.description = dontmanage._("This is an example website auto-generated from DontManageErp")
 		delete_page_cache("home")
-
-	def setup_items(self):
-		for d in dontmanage.get_all(
-			"Website Item",
-			fields=["name", "item_name", "description", "website_image", "route"],
-			filters={"published": 1},
-			limit=3,
-		):
-
-			doc = dontmanage.get_doc("Website Item", d.name)
-			if not doc.route:
-				# set missing route
-				doc.save()
-			self.append(
-				"products",
-				dict(
-					item_code=d.name,
-					item_name=d.item_name,
-					description=d.description,
-					image=d.website_image,
-					route=d.route,
-				),
-			)

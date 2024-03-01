@@ -25,6 +25,15 @@ class TestEmployee(unittest.TestCase):
 		employee1_doc.status = "Left"
 		self.assertRaises(InactiveEmployeeStatusError, employee1_doc.save)
 
+	def test_user_has_employee(self):
+		employee = make_employee("test_emp_user_creation@company.com")
+		employee_doc = dontmanage.get_doc("Employee", employee)
+		user = employee_doc.user_id
+		self.assertTrue("Employee" in dontmanage.get_roles(user))
+		employee_doc.user_id = ""
+		employee_doc.save()
+		self.assertTrue("Employee" not in dontmanage.get_roles(user))
+
 	def tearDown(self):
 		dontmanage.db.rollback()
 
@@ -66,5 +75,8 @@ def make_employee(user, company=None, **kwargs):
 		employee.insert()
 		return employee.name
 	else:
-		dontmanage.db.set_value("Employee", {"employee_name": user}, "status", "Active")
-		return dontmanage.get_value("Employee", {"employee_name": user}, "name")
+		employee = dontmanage.get_doc("Employee", {"employee_name": user})
+		employee.update(kwargs)
+		employee.status = "Active"
+		employee.save()
+		return employee.name

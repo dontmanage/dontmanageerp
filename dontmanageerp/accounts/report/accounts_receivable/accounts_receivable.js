@@ -1,6 +1,8 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
 
+dontmanage.provide("dontmanageerp.utils");
+
 dontmanage.query_reports["Accounts Receivable"] = {
 	"filters": [
 		{
@@ -38,33 +40,27 @@ dontmanage.query_reports["Accounts Receivable"] = {
 			}
 		},
 		{
-			"fieldname": "customer",
-			"label": __("Customer"),
-			"fieldtype": "Link",
-			"options": "Customer",
-			on_change: () => {
-				var customer = dontmanage.query_report.get_filter_value('customer');
-				var company = dontmanage.query_report.get_filter_value('company');
-				if (customer) {
-					dontmanage.db.get_value('Customer', customer, ["tax_id", "customer_name", "payment_terms"], function(value) {
-						dontmanage.query_report.set_filter_value('tax_id', value["tax_id"]);
-						dontmanage.query_report.set_filter_value('customer_name', value["customer_name"]);
-						dontmanage.query_report.set_filter_value('payment_terms', value["payment_terms"]);
-					});
-
-					dontmanage.db.get_value('Customer Credit Limit', {'parent': customer, 'company': company},
-						["credit_limit"], function(value) {
-						if (value) {
-							dontmanage.query_report.set_filter_value('credit_limit', value["credit_limit"]);
-						}
-					}, "Customer");
-				} else {
-					dontmanage.query_report.set_filter_value('tax_id', "");
-					dontmanage.query_report.set_filter_value('customer_name', "");
-					dontmanage.query_report.set_filter_value('credit_limit', "");
-					dontmanage.query_report.set_filter_value('payment_terms', "");
-				}
+			"fieldname":"party_type",
+			"label": __("Party Type"),
+			"fieldtype": "Autocomplete",
+			options: get_party_type_options(),
+			on_change: function() {
+				dontmanage.query_report.set_filter_value('party', "");
+				dontmanage.query_report.toggle_filter_display('customer_group', dontmanage.query_report.get_filter_value('party_type') !== "Customer");
 			}
+		},
+		{
+			"fieldname":"party",
+			"label": __("Party"),
+			"fieldtype": "MultiSelectList",
+			get_data: function(txt) {
+				if (!dontmanage.query_report.filters) return;
+
+				let party_type = dontmanage.query_report.get_filter_value('party_type');
+				if (!party_type) return;
+
+				return dontmanage.db.get_link_options(party_type, txt);
+			},
 		},
 		{
 			"fieldname": "party_account",
@@ -118,10 +114,13 @@ dontmanage.query_reports["Accounts Receivable"] = {
 			"reqd": 1
 		},
 		{
-			"fieldname": "customer_group",
+			"fieldname":"customer_group",
 			"label": __("Customer Group"),
-			"fieldtype": "Link",
-			"options": "Customer Group"
+			"fieldtype": "MultiSelectList",
+			"options": "Customer Group",
+			get_data: function(txt) {
+				return dontmanage.db.get_link_options('Customer Group', txt);
+			}
 		},
 		{
 			"fieldname": "payment_terms_template",
@@ -173,33 +172,24 @@ dontmanage.query_reports["Accounts Receivable"] = {
 			"fieldtype": "Check",
 		},
 		{
-			"fieldname": "tax_id",
-			"label": __("Tax Id"),
-			"fieldtype": "Data",
-			"hidden": 1
-		},
-		{
 			"fieldname": "show_remarks",
 			"label": __("Show Remarks"),
 			"fieldtype": "Check",
 		},
 		{
-			"fieldname": "customer_name",
-			"label": __("Customer Name"),
-			"fieldtype": "Data",
-			"hidden": 1
+			"fieldname": "for_revaluation_journals",
+			"label": __("Revaluation Journals"),
+			"fieldtype": "Check",
 		},
 		{
-			"fieldname": "payment_terms",
-			"label": __("Payment Tems"),
-			"fieldtype": "Data",
-			"hidden": 1
+			"fieldname": "ignore_accounts",
+			"label": __("Group by Voucher"),
+			"fieldtype": "Check",
 		},
 		{
-			"fieldname": "credit_limit",
-			"label": __("Credit Limit"),
-			"fieldtype": "Currency",
-			"hidden": 1
+			"fieldname": "in_party_currency",
+			"label": __("In Party Currency"),
+			"fieldtype": "Check",
 		}
 	],
 
@@ -221,3 +211,16 @@ dontmanage.query_reports["Accounts Receivable"] = {
 }
 
 dontmanageerp.utils.add_dimensions('Accounts Receivable', 9);
+
+
+function get_party_type_options() {
+	let options = [];
+	dontmanage.db.get_list(
+		"Party Type", {filters:{"account_type": "Receivable"}, fields:['name']}
+	).then((res) => {
+		res.forEach((party_type) => {
+			options.push(party_type.name);
+		});
+	});
+	return options;
+}

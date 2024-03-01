@@ -225,6 +225,7 @@ dontmanageerp.PointOfSale.Controller = class {
 		voucher.pos_opening_entry = this.pos_opening;
 		voucher.period_end_date = dontmanage.datetime.now_datetime();
 		voucher.posting_date = dontmanage.datetime.now_date();
+		voucher.posting_time = dontmanage.datetime.now_time();
 		dontmanage.set_route('Form', 'POS Closing Entry', voucher.name);
 	}
 
@@ -542,12 +543,12 @@ dontmanageerp.PointOfSale.Controller = class {
 				if (!this.frm.doc.customer)
 					return this.raise_customer_selection_alert();
 
-				const { item_code, batch_no, serial_no, rate } = item;
+				const { item_code, batch_no, serial_no, rate, uom } = item;
 
 				if (!item_code)
 					return;
 
-				const new_item = { item_code, batch_no, rate, [field]: value };
+				const new_item = { item_code, batch_no, rate, uom, [field]: value };
 
 				if (serial_no) {
 					await this.check_serial_no_availablilty(item_code, this.frm.doc.set_warehouse, serial_no);
@@ -559,8 +560,10 @@ dontmanageerp.PointOfSale.Controller = class {
 
 				item_row = this.frm.add_child('items', new_item);
 
-				if (field === 'qty' && value !== 0 && !this.allow_negative_stock)
-					await this.check_stock_availability(item_row, value, this.frm.doc.set_warehouse);
+				if (field === 'qty' && value !== 0 && !this.allow_negative_stock) {
+					const qty_needed = value * item_row.conversion_factor;
+					await this.check_stock_availability(item_row, qty_needed, this.frm.doc.set_warehouse);
+				}
 
 				await this.trigger_new_item_events(item_row);
 
@@ -577,7 +580,7 @@ dontmanageerp.PointOfSale.Controller = class {
 			console.log(error);
 		} finally {
 			dontmanage.dom.unfreeze();
-			return item_row;
+			return item_row; // eslint-disable-line no-unsafe-finally
 		}
 	}
 
@@ -598,12 +601,12 @@ dontmanageerp.PointOfSale.Controller = class {
 			// if item is clicked twice from item selector
 			// then "item_code, batch_no, uom, rate" will help in getting the exact item
 			// to increase the qty by one
-			const has_batch_no = batch_no;
+			const has_batch_no = (batch_no !== 'null' && batch_no !== null);
 			item_row = this.frm.doc.items.find(
 				i => i.item_code === item_code
 					&& (!has_batch_no || (has_batch_no && i.batch_no === batch_no))
 					&& (i.uom === uom)
-					&& (i.rate == rate)
+					&& (i.rate === flt(rate))
 			);
 		}
 
@@ -649,6 +652,7 @@ dontmanageerp.PointOfSale.Controller = class {
 		const is_stock_item = resp[1];
 
 		dontmanage.dom.unfreeze();
+		const bold_uom = item_row.stock_uom.bold();
 		const bold_item_code = item_row.item_code.bold();
 		const bold_warehouse = warehouse.bold();
 		const bold_available_qty = available_qty.toString().bold()
@@ -664,7 +668,7 @@ dontmanageerp.PointOfSale.Controller = class {
 			}
 		} else if (is_stock_item && available_qty < qty_needed) {
 			dontmanage.throw({
-				message: __('Stock quantity not enough for Item Code: {0} under warehouse {1}. Available quantity {2}.', [bold_item_code, bold_warehouse, bold_available_qty]),
+				message: __('Stock quantity not enough for Item Code: {0} under warehouse {1}. Available quantity {2} {3}.', [bold_item_code, bold_warehouse, bold_available_qty, bold_uom]),
 				indicator: 'orange'
 			});
 			dontmanage.utils.play_sound("error");

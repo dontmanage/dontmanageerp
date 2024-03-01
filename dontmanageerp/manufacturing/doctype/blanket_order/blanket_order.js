@@ -18,7 +18,7 @@ dontmanage.ui.form.on('Blanket Order', {
 	},
 
 	refresh: function(frm) {
-		dontmanageerp.hide_company();
+		dontmanageerp.hide_company(frm);
 		if (frm.doc.customer && frm.doc.docstatus === 1 && frm.doc.to_date > dontmanage.datetime.get_today()) {
 			frm.add_custom_button(__("Sales Order"), function() {
 				dontmanage.model.open_mapped_doc({

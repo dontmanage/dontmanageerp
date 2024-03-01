@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Sales Person Target Variance Based On Item Group"] = {
 	"filters": [
@@ -16,7 +16,7 @@ dontmanage.query_reports["Sales Person Target Variance Based On Item Group"] = {
 			label: __("Fiscal Year"),
 			fieldtype: "Link",
 			options: "Fiscal Year",
-			default: dontmanage.sys_defaults.fiscal_year
+			default: dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today()),
 		},
 		{
 			fieldname: "doctype",

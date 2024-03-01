@@ -65,7 +65,7 @@ New passwords will be created for the DontManageErp "Administrator" user, the Ma
 1. [DontManage School](https://dontmanage.school) - Learn DontManage Framework and DontManageErp from the various courses by the maintainers or from the community.
 2. [Official documentation](https://docs.dontmanageerp.com/) - Extensive documentation for DontManageErp.
 3. [Discussion Forum](https://discuss.dontmanageerp.com/) - Engage with community of DontManageErp users and service providers.
-4. [Telegram Group](https://t.me/dontmanageerphelp) - Get instant help from huge community of users.
+4. [Telegram Group](https://dontmanageerp_public.t.me) - Get instant help from huge community of users.
 
 
 ## Contributing

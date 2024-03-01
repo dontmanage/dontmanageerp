@@ -11,6 +11,11 @@ from dontmanageerp.stock.doctype.item.test_item import create_item, make_item
 from dontmanageerp.stock.doctype.packed_item.test_packed_item import create_product_bundle
 from dontmanageerp.stock.doctype.pick_list.pick_list import create_delivery_note
 from dontmanageerp.stock.doctype.purchase_receipt.test_purchase_receipt import make_purchase_receipt
+from dontmanageerp.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle import (
+	get_batch_from_bundle,
+	get_serial_nos_from_bundle,
+	make_serial_batch_bundle,
+)
 from dontmanageerp.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
 from dontmanageerp.stock.doctype.stock_reconciliation.stock_reconciliation import (
 	EmptyStockReconciliationItemsError,
@@ -139,6 +144,18 @@ class TestPickList(DontManageTestCase):
 		self.assertEqual(pick_list.locations[1].qty, 10)
 
 	def test_pick_list_shows_serial_no_for_serialized_item(self):
+		serial_nos = ["SADD-0001", "SADD-0002", "SADD-0003", "SADD-0004", "SADD-0005"]
+
+		for serial_no in serial_nos:
+			if not dontmanage.db.exists("Serial No", serial_no):
+				dontmanage.get_doc(
+					{
+						"doctype": "Serial No",
+						"company": "_Test Company",
+						"item_code": "_Test Serialized Item",
+						"serial_no": serial_no,
+					}
+				).insert()
 
 		stock_reconciliation = dontmanage.get_doc(
 			{
@@ -151,7 +168,20 @@ class TestPickList(DontManageTestCase):
 						"warehouse": "_Test Warehouse - _TC",
 						"valuation_rate": 100,
 						"qty": 5,
-						"serial_no": "123450\n123451\n123452\n123453\n123454",
+						"serial_and_batch_bundle": make_serial_batch_bundle(
+							dontmanage._dict(
+								{
+									"item_code": "_Test Serialized Item",
+									"warehouse": "_Test Warehouse - _TC",
+									"qty": 5,
+									"rate": 100,
+									"type_of_transaction": "Inward",
+									"do_not_submit": True,
+									"voucher_type": "Stock Reconciliation",
+									"serial_nos": serial_nos,
+								}
+							)
+						).name,
 					}
 				],
 			}
@@ -161,6 +191,10 @@ class TestPickList(DontManageTestCase):
 			stock_reconciliation.submit()
 		except EmptyStockReconciliationItemsError:
 			pass
+
+		so = make_sales_order(
+			item_code="_Test Serialized Item", warehouse="_Test Warehouse - _TC", qty=5, rate=1000
+		)
 
 		pick_list = dontmanage.get_doc(
 			{
@@ -175,18 +209,22 @@ class TestPickList(DontManageTestCase):
 						"qty": 1000,
 						"stock_qty": 1000,
 						"conversion_factor": 1,
-						"sales_order": "_T-Sales Order-1",
-						"sales_order_item": "_T-Sales Order-1_item",
+						"sales_order": so.name,
+						"sales_order_item": so.items[0].name,
 					}
 				],
 			}
 		)
 
-		pick_list.set_item_locations()
+		pick_list.save()
+		pick_list.submit()
+
 		self.assertEqual(pick_list.locations[0].item_code, "_Test Serialized Item")
 		self.assertEqual(pick_list.locations[0].warehouse, "_Test Warehouse - _TC")
 		self.assertEqual(pick_list.locations[0].qty, 5)
-		self.assertEqual(pick_list.locations[0].serial_no, "123450\n123451\n123452\n123453\n123454")
+		self.assertEqual(
+			get_serial_nos_from_bundle(pick_list.locations[0].serial_and_batch_bundle), serial_nos
+		)
 
 	def test_pick_list_shows_batch_no_for_batched_item(self):
 		# check if oldest batch no is picked
@@ -203,7 +241,7 @@ class TestPickList(DontManageTestCase):
 		pr1 = make_purchase_receipt(item_code="Batched Item", qty=1, rate=100.0)
 
 		pr1.load_from_db()
-		oldest_batch_no = pr1.items[0].batch_no
+		oldest_batch_no = get_batch_from_bundle(pr1.items[0].serial_and_batch_bundle)
 
 		pr2 = make_purchase_receipt(item_code="Batched Item", qty=2, rate=100.0)
 
@@ -245,8 +283,8 @@ class TestPickList(DontManageTestCase):
 		pr1 = make_purchase_receipt(item_code="Batched and Serialised Item", qty=2, rate=100.0)
 
 		pr1.load_from_db()
-		oldest_batch_no = pr1.items[0].batch_no
-		oldest_serial_nos = pr1.items[0].serial_no
+		oldest_batch_no = get_batch_from_bundle(pr1.items[0].serial_and_batch_bundle)
+		oldest_serial_nos = get_serial_nos_from_bundle(pr1.items[0].serial_and_batch_bundle)
 
 		pr2 = make_purchase_receipt(item_code="Batched and Serialised Item", qty=2, rate=100.0)
 
@@ -266,10 +304,17 @@ class TestPickList(DontManageTestCase):
 			}
 		)
 		pick_list.set_item_locations()
+		pick_list.submit()
+		pick_list.reload()
 
-		self.assertEqual(pick_list.locations[0].batch_no, oldest_batch_no)
-		self.assertEqual(pick_list.locations[0].serial_no, oldest_serial_nos)
+		self.assertEqual(
+			get_batch_from_bundle(pick_list.locations[0].serial_and_batch_bundle), oldest_batch_no
+		)
+		self.assertEqual(
+			get_serial_nos_from_bundle(pick_list.locations[0].serial_and_batch_bundle), oldest_serial_nos
+		)
 
+		pick_list.cancel()
 		pr1.cancel()
 		pr2.cancel()
 
@@ -604,6 +649,112 @@ class TestPickList(DontManageTestCase):
 		so.reload()
 		self.assertEqual(so.per_picked, 50)
 
+	def test_picklist_for_batch_item(self):
+		warehouse = "_Test Warehouse - _TC"
+		item = make_item(
+			properties={"is_stock_item": 1, "has_batch_no": 1, "batch_no_series": "PICKLT-.######"}
+		).name
+
+		# create batch
+		for batch_id in ["PICKLT-000001", "PICKLT-000002"]:
+			if not dontmanage.db.exists("Batch", batch_id):
+				dontmanage.get_doc(
+					{
+						"doctype": "Batch",
+						"batch_id": batch_id,
+						"item": item,
+					}
+				).insert()
+
+		make_stock_entry(
+			item=item,
+			to_warehouse=warehouse,
+			qty=50,
+			basic_rate=100,
+			batches=dontmanage._dict({"PICKLT-000001": 30, "PICKLT-000002": 20}),
+		)
+
+		so = make_sales_order(item_code=item, qty=25.0, rate=100)
+		pl = create_pick_list(so.name)
+		pl.submit()
+		# pick half the qty
+		for loc in pl.locations:
+			self.assertEqual(loc.qty, 25.0)
+			self.assertTrue(loc.serial_and_batch_bundle)
+
+		pl.save()
+		pl.submit()
+
+		so1 = make_sales_order(item_code=item, qty=10.0, rate=100)
+		pl1 = create_pick_list(so1.name)
+		pl1.submit()
+
+		# pick half the qty
+		for loc in pl1.locations:
+			self.assertEqual(loc.qty, 5.0)
+			self.assertTrue(loc.serial_and_batch_bundle)
+
+			data = dontmanage.get_all(
+				"Serial and Batch Entry",
+				fields=["qty", "batch_no"],
+				filters={"parent": loc.serial_and_batch_bundle},
+			)
+
+			for d in data:
+				self.assertTrue(d.batch_no in ["PICKLT-000001", "PICKLT-000002"])
+				if d.batch_no == "PICKLT-000001":
+					self.assertEqual(d.qty, 5.0 * -1)
+				elif d.batch_no == "PICKLT-000002":
+					self.assertEqual(d.qty, 5.0 * -1)
+
+		pl1.cancel()
+		pl.cancel()
+
+	def test_picklist_for_serial_item(self):
+		warehouse = "_Test Warehouse - _TC"
+		item = make_item(
+			properties={"is_stock_item": 1, "has_serial_no": 1, "serial_no_series": "SN-PICKLT-.######"}
+		).name
+
+		make_stock_entry(item=item, to_warehouse=warehouse, qty=50, basic_rate=100)
+
+		so = make_sales_order(item_code=item, qty=25.0, rate=100)
+		pl = create_pick_list(so.name)
+		pl.submit()
+		picked_serial_nos = []
+		# pick half the qty
+		for loc in pl.locations:
+			self.assertEqual(loc.qty, 25.0)
+			self.assertTrue(loc.serial_and_batch_bundle)
+
+			data = dontmanage.get_all(
+				"Serial and Batch Entry", fields=["serial_no"], filters={"parent": loc.serial_and_batch_bundle}
+			)
+
+			picked_serial_nos = [d.serial_no for d in data]
+			self.assertEqual(len(picked_serial_nos), 25)
+
+		so1 = make_sales_order(item_code=item, qty=10.0, rate=100)
+		pl1 = create_pick_list(so1.name)
+		pl1.submit()
+		# pick half the qty
+		for loc in pl1.locations:
+			self.assertEqual(loc.qty, 10.0)
+			self.assertTrue(loc.serial_and_batch_bundle)
+
+			data = dontmanage.get_all(
+				"Serial and Batch Entry",
+				fields=["qty", "batch_no"],
+				filters={"parent": loc.serial_and_batch_bundle},
+			)
+
+			self.assertEqual(len(data), 10)
+			for d in data:
+				self.assertTrue(d.serial_no not in picked_serial_nos)
+
+		pl1.cancel()
+		pl.cancel()
+
 	def test_picklist_with_bundles(self):
 		warehouse = "_Test Warehouse - _TC"
 
@@ -692,119 +843,8 @@ class TestPickList(DontManageTestCase):
 
 		dn.cancel()
 		pl.reload()
-		self.assertEqual(pl.status, "Completed")
+		self.assertEqual(pl.status, "Open")
 
 		pl.cancel()
 		pl.reload()
 		self.assertEqual(pl.status, "Cancelled")
-
-	def test_consider_existing_pick_list(self):
-		def create_items(items_properties):
-			items = []
-
-			for properties in items_properties:
-				properties.update({"maintain_stock": 1})
-				item_code = make_item(properties=properties).name
-				properties.update({"item_code": item_code})
-				items.append(properties)
-
-			return items
-
-		def create_stock_entries(items):
-			warehouses = ["Stores - _TC", "Finished Goods - _TC"]
-
-			for item in items:
-				for warehouse in warehouses:
-					se = make_stock_entry(
-						item=item.get("item_code"),
-						to_warehouse=warehouse,
-						qty=5,
-					)
-
-		def get_item_list(items, qty, warehouse="All Warehouses - _TC"):
-			return [
-				{
-					"item_code": item.get("item_code"),
-					"qty": qty,
-					"warehouse": warehouse,
-				}
-				for item in items
-			]
-
-		def get_picked_items_details(pick_list_doc):
-			items_data = {}
-
-			for location in pick_list_doc.locations:
-				key = (location.warehouse, location.batch_no) if location.batch_no else location.warehouse
-				serial_no = [x for x in location.serial_no.split("\n") if x] if location.serial_no else None
-				data = {"picked_qty": location.picked_qty}
-				if serial_no:
-					data["serial_no"] = serial_no
-				if location.item_code not in items_data:
-					items_data[location.item_code] = {key: data}
-				else:
-					items_data[location.item_code][key] = data
-
-			return items_data
-
-		# Step - 1: Setup - Create Items and Stock Entries
-		items_properties = [
-			{
-				"valuation_rate": 100,
-			},
-			{
-				"valuation_rate": 200,
-				"has_batch_no": 1,
-				"create_new_batch": 1,
-			},
-			{
-				"valuation_rate": 300,
-				"has_serial_no": 1,
-				"serial_no_series": "SNO.###",
-			},
-			{
-				"valuation_rate": 400,
-				"has_batch_no": 1,
-				"create_new_batch": 1,
-				"has_serial_no": 1,
-				"serial_no_series": "SNO.###",
-			},
-		]
-
-		items = create_items(items_properties)
-		create_stock_entries(items)
-
-		# Step - 2: Create Sales Order [1]
-		so1 = make_sales_order(item_list=get_item_list(items, qty=6))
-
-		# Step - 3: Create and Submit Pick List [1] for Sales Order [1]
-		pl1 = create_pick_list(so1.name)
-		pl1.submit()
-
-		# Step - 4: Create Sales Order [2] with same Item(s) as Sales Order [1]
-		so2 = make_sales_order(item_list=get_item_list(items, qty=4))
-
-		# Step - 5: Create Pick List [2] for Sales Order [2]
-		pl2 = create_pick_list(so2.name)
-		pl2.save()
-
-		# Step - 6: Assert
-		picked_items_details = get_picked_items_details(pl1)
-
-		for location in pl2.locations:
-			key = (location.warehouse, location.batch_no) if location.batch_no else location.warehouse
-			item_data = picked_items_details.get(location.item_code, {}).get(key, {})
-			picked_qty = item_data.get("picked_qty", 0)
-			picked_serial_no = picked_items_details.get("serial_no", [])
-			bin_actual_qty = dontmanage.db.get_value(
-				"Bin", {"item_code": location.item_code, "warehouse": location.warehouse}, "actual_qty"
-			)
-
-			# Available Qty to pick should be equal to [Actual Qty - Picked Qty]
-			self.assertEqual(location.stock_qty, bin_actual_qty - picked_qty)
-
-			# Serial No should not be in the Picked Serial No list
-			if location.serial_no:
-				a = set(picked_serial_no)
-				b = set([x for x in location.serial_no.split("\n") if x])
-				self.assertSetEqual(b, b.difference(a))

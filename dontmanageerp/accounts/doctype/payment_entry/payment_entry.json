@@ -19,6 +19,7 @@
   "party_type",
   "party",
   "party_name",
+  "book_advance_payments_in_separate_party_account",
   "column_break_11",
   "bank_account",
   "party_bank_account",
@@ -48,7 +49,8 @@
   "base_received_amount",
   "base_received_amount_after_tax",
   "section_break_14",
-  "get_outstanding_invoice",
+  "get_outstanding_invoices",
+  "get_outstanding_orders",
   "references",
   "section_break_34",
   "total_allocated_amount",
@@ -85,12 +87,14 @@
   "status",
   "custom_remarks",
   "remarks",
+  "base_in_words",
   "column_break_16",
   "letter_head",
   "print_heading",
   "bank",
   "bank_account_no",
   "payment_order",
+  "in_words",
   "subscription_section",
   "auto_repeat",
   "amended_from",
@@ -356,12 +360,6 @@
    "label": "Reference"
   },
   {
-   "depends_on": "eval:doc.docstatus==0",
-   "fieldname": "get_outstanding_invoice",
-   "fieldtype": "Button",
-   "label": "Get Outstanding Invoice"
-  },
-  {
    "fieldname": "references",
    "fieldtype": "Table",
    "label": "Payment References",
@@ -599,6 +597,7 @@
    "fieldname": "status",
    "fieldtype": "Select",
    "label": "Status",
+   "no_copy": 1,
    "options": "\nDraft\nSubmitted\nCancelled",
    "read_only": 1
   },
@@ -728,12 +727,55 @@
    "fieldname": "section_break_60",
    "fieldtype": "Section Break",
    "hide_border": 1
+  },
+  {
+   "depends_on": "eval:doc.docstatus==0",
+   "fieldname": "get_outstanding_invoices",
+   "fieldtype": "Button",
+   "label": "Get Outstanding Invoices"
+  },
+  {
+   "depends_on": "eval:doc.docstatus==0",
+   "fieldname": "get_outstanding_orders",
+   "fieldtype": "Button",
+   "label": "Get Outstanding Orders"
+  },
+  {
+   "default": "0",
+   "fetch_from": "company.book_advance_payments_in_separate_party_account",
+   "fieldname": "book_advance_payments_in_separate_party_account",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Book Advance Payments in Separate Party Account",
+   "read_only": 1
+  },
+  {
+   "fieldname": "base_in_words",
+   "fieldtype": "Small Text",
+   "label": "In Words (Company Currency)",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "in_words",
+   "fieldtype": "Small Text",
+   "label": "In Words",
+   "print_hide": 1,
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
- "links": [],
- "modified": "2023-02-14 04:52:30.478523",
+ "links": [
+  {
+   "is_child_table": 1,
+   "link_doctype": "Bank Transaction Payments",
+   "link_fieldname": "payment_entry",
+   "parent_doctype": "Bank Transaction",
+   "table_fieldname": "payment_entries"
+  }
+ ],
+ "modified": "2024-01-03 12:46:41.759121",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "Payment Entry",

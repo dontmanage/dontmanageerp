@@ -6,6 +6,7 @@ import copy
 
 import dontmanage
 from dontmanage import _
+from dontmanage.desk.reportview import get_match_cond
 from dontmanage.model.document import Document
 from dontmanage.utils import add_days, add_months, format_date, getdate, today
 from dontmanage.utils.jinja import validate_template
@@ -14,6 +15,7 @@ from dontmanage.www.printview import get_print_style
 
 from dontmanageerp import get_company_currency
 from dontmanageerp.accounts.party import get_party_account_currency
+from dontmanageerp.accounts.report.accounts_receivable.accounts_receivable import execute as get_ar_soa
 from dontmanageerp.accounts.report.accounts_receivable_summary.accounts_receivable_summary import (
 	execute as get_ageing,
 )
@@ -21,11 +23,72 @@ from dontmanageerp.accounts.report.general_ledger.general_ledger import execute 
 
 
 class ProcessStatementOfAccounts(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.process_statement_of_accounts_customer.process_statement_of_accounts_customer import (
+			ProcessStatementOfAccountsCustomer,
+		)
+		from dontmanageerp.accounts.doctype.psoa_cost_center.psoa_cost_center import PSOACostCenter
+		from dontmanageerp.accounts.doctype.psoa_project.psoa_project import PSOAProject
+
+		account: DF.Link | None
+		ageing_based_on: DF.Literal["Due Date", "Posting Date"]
+		based_on_payment_terms: DF.Check
+		body: DF.TextEditor | None
+		cc_to: DF.Link | None
+		collection_name: DF.DynamicLink | None
+		company: DF.Link
+		cost_center: DF.TableMultiSelect[PSOACostCenter]
+		currency: DF.Link | None
+		customer_collection: DF.Literal[
+			"", "Customer Group", "Territory", "Sales Partner", "Sales Person"
+		]
+		customers: DF.Table[ProcessStatementOfAccountsCustomer]
+		enable_auto_email: DF.Check
+		filter_duration: DF.Int
+		finance_book: DF.Link | None
+		frequency: DF.Literal["Weekly", "Monthly", "Quarterly"]
+		from_date: DF.Date | None
+		group_by: DF.Literal["", "Group by Voucher", "Group by Voucher (Consolidated)"]
+		ignore_exchange_rate_revaluation_journals: DF.Check
+		include_ageing: DF.Check
+		include_break: DF.Check
+		letter_head: DF.Link | None
+		orientation: DF.Literal["Landscape", "Portrait"]
+		payment_terms_template: DF.Link | None
+		pdf_name: DF.Data | None
+		posting_date: DF.Date | None
+		primary_mandatory: DF.Check
+		project: DF.TableMultiSelect[PSOAProject]
+		report: DF.Literal["General Ledger", "Accounts Receivable"]
+		sales_partner: DF.Link | None
+		sales_person: DF.Link | None
+		sender: DF.Link | None
+		show_net_values_in_party_account: DF.Check
+		start_date: DF.Date | None
+		subject: DF.Data | None
+		terms_and_conditions: DF.Link | None
+		territory: DF.Link | None
+		to_date: DF.Date | None
+	# end: auto-generated types
+
 	def validate(self):
 		if not self.subject:
 			self.subject = "Statement Of Accounts for {{ customer.customer_name }}"
 		if not self.body:
-			self.body = "Hello {{ customer.name }},<br>PFA your Statement Of Accounts from {{ doc.from_date }} to {{ doc.to_date }}."
+			if self.report == "General Ledger":
+				body_str = " from {{ doc.from_date }} to {{ doc.to_date }}."
+			else:
+				body_str = " until {{ doc.posting_date }}."
+			self.body = "Hello {{ customer.customer_name }},<br>PFA your Statement Of Accounts" + body_str
+		if not self.pdf_name:
+			self.pdf_name = "{{ customer.customer_name }}"
 
 		validate_template(self.subject)
 		validate_template(self.body)
@@ -40,31 +103,26 @@ class ProcessStatementOfAccounts(Document):
 
 
 def get_report_pdf(doc, consolidated=True):
+	statement_dict = get_statement_dict(doc)
+	if not bool(statement_dict):
+		return False
+	elif consolidated:
+		delimiter = '<div style="page-break-before: always;"></div>' if doc.include_break else ""
+		result = delimiter.join(list(statement_dict.values()))
+		return get_pdf(result, {"orientation": doc.orientation})
+	else:
+		for customer, statement_html in statement_dict.items():
+			statement_dict[customer] = get_pdf(statement_html, {"orientation": doc.orientation})
+		return statement_dict
+
+
+def get_statement_dict(doc, get_statement_dict=False):
 	statement_dict = {}
 	ageing = ""
-	base_template_path = "dontmanage/www/printview.html"
-	template_path = (
-		"dontmanageerp/accounts/doctype/process_statement_of_accounts/process_statement_of_accounts.html"
-	)
 
 	for entry in doc.customers:
 		if doc.include_ageing:
-			ageing_filters = dontmanage._dict(
-				{
-					"company": doc.company,
-					"report_date": doc.to_date,
-					"ageing_based_on": doc.ageing_based_on,
-					"range1": 30,
-					"range2": 60,
-					"range3": 90,
-					"range4": 120,
-					"customer": entry.customer,
-				}
-			)
-			col1, ageing = get_ageing(ageing_filters)
-
-			if ageing:
-				ageing[0]["ageing_based_on"] = doc.ageing_based_on
+			ageing = set_ageing(doc, entry)
 
 		tax_id = dontmanage.get_doc("Customer", entry.customer).tax_id
 		presentation_currency = (
@@ -72,69 +130,137 @@ def get_report_pdf(doc, consolidated=True):
 			or doc.currency
 			or get_company_currency(doc.company)
 		)
-		if doc.letter_head:
-			from dontmanage.www.printview import get_letter_head
 
-			letter_head = get_letter_head(doc, 0)
+		filters = get_common_filters(doc)
+		if doc.ignore_exchange_rate_revaluation_journals:
+			filters.update({"ignore_err": True})
 
-		filters = dontmanage._dict(
-			{
-				"from_date": doc.from_date,
-				"to_date": doc.to_date,
-				"company": doc.company,
-				"finance_book": doc.finance_book if doc.finance_book else None,
-				"account": [doc.account] if doc.account else None,
-				"party_type": "Customer",
-				"party": [entry.customer],
-				"party_name": [entry.customer_name] if entry.customer_name else None,
-				"presentation_currency": presentation_currency,
-				"group_by": doc.group_by,
-				"currency": doc.currency,
-				"cost_center": [cc.cost_center_name for cc in doc.cost_center],
-				"project": [p.project_name for p in doc.project],
-				"show_opening_entries": 0,
-				"include_default_book_entries": 0,
-				"tax_id": tax_id if tax_id else None,
-			}
-		)
-		col, res = get_soa(filters)
+		if doc.report == "General Ledger":
+			filters.update(get_gl_filters(doc, entry, tax_id, presentation_currency))
+			col, res = get_soa(filters)
+			for x in [0, -2, -1]:
+				res[x]["account"] = res[x]["account"].replace("'", "")
+			if len(res) == 3:
+				continue
+		else:
+			filters.update(get_ar_filters(doc, entry))
+			ar_res = get_ar_soa(filters)
+			col, res = ar_res[0], ar_res[1]
+			if not res:
+				continue
 
-		for x in [0, -2, -1]:
-			res[x]["account"] = res[x]["account"].replace("'", "")
-
-		if len(res) == 3:
-			continue
-
-		html = dontmanage.render_template(
-			template_path,
-			{
-				"filters": filters,
-				"data": res,
-				"ageing": ageing[0] if (doc.include_ageing and ageing) else None,
-				"letter_head": letter_head if doc.letter_head else None,
-				"terms_and_conditions": dontmanage.db.get_value(
-					"Terms and Conditions", doc.terms_and_conditions, "terms"
-				)
-				if doc.terms_and_conditions
-				else None,
-			},
+		statement_dict[entry.customer] = (
+			[res, ageing] if get_statement_dict else get_html(doc, filters, entry, col, res, ageing)
 		)
 
-		html = dontmanage.render_template(
-			base_template_path,
-			{"body": html, "css": get_print_style(), "title": "Statement For " + entry.customer},
-		)
-		statement_dict[entry.customer] = html
+	return statement_dict
 
-	if not bool(statement_dict):
-		return False
-	elif consolidated:
-		result = "".join(list(statement_dict.values()))
-		return get_pdf(result, {"orientation": doc.orientation})
-	else:
-		for customer, statement_html in statement_dict.items():
-			statement_dict[customer] = get_pdf(statement_html, {"orientation": doc.orientation})
-		return statement_dict
+
+def set_ageing(doc, entry):
+	ageing_filters = dontmanage._dict(
+		{
+			"company": doc.company,
+			"report_date": doc.to_date,
+			"ageing_based_on": doc.ageing_based_on,
+			"range1": 30,
+			"range2": 60,
+			"range3": 90,
+			"range4": 120,
+			"party_type": "Customer",
+			"party": [entry.customer],
+		}
+	)
+	col1, ageing = get_ageing(ageing_filters)
+
+	if ageing:
+		ageing[0]["ageing_based_on"] = doc.ageing_based_on
+
+	return ageing
+
+
+def get_common_filters(doc):
+	return dontmanage._dict(
+		{
+			"company": doc.company,
+			"finance_book": doc.finance_book if doc.finance_book else None,
+			"account": [doc.account] if doc.account else None,
+			"cost_center": [cc.cost_center_name for cc in doc.cost_center],
+		}
+	)
+
+
+def get_gl_filters(doc, entry, tax_id, presentation_currency):
+	return {
+		"from_date": doc.from_date,
+		"to_date": doc.to_date,
+		"party_type": "Customer",
+		"party": [entry.customer],
+		"party_name": [entry.customer_name] if entry.customer_name else None,
+		"presentation_currency": presentation_currency,
+		"group_by": doc.group_by,
+		"currency": doc.currency,
+		"project": [p.project_name for p in doc.project],
+		"show_opening_entries": 0,
+		"include_default_book_entries": 0,
+		"tax_id": tax_id if tax_id else None,
+		"show_net_values_in_party_account": doc.show_net_values_in_party_account,
+	}
+
+
+def get_ar_filters(doc, entry):
+	return {
+		"report_date": doc.posting_date if doc.posting_date else None,
+		"party_type": "Customer",
+		"party": [entry.customer],
+		"customer_name": entry.customer_name if entry.customer_name else None,
+		"payment_terms_template": doc.payment_terms_template if doc.payment_terms_template else None,
+		"sales_partner": doc.sales_partner if doc.sales_partner else None,
+		"sales_person": doc.sales_person if doc.sales_person else None,
+		"territory": doc.territory if doc.territory else None,
+		"based_on_payment_terms": doc.based_on_payment_terms,
+		"report_name": "Accounts Receivable",
+		"ageing_based_on": doc.ageing_based_on,
+		"range1": 30,
+		"range2": 60,
+		"range3": 90,
+		"range4": 120,
+	}
+
+
+def get_html(doc, filters, entry, col, res, ageing):
+	base_template_path = "dontmanage/www/printview.html"
+	template_path = (
+		"dontmanageerp/accounts/doctype/process_statement_of_accounts/process_statement_of_accounts.html"
+		if doc.report == "General Ledger"
+		else "dontmanageerp/accounts/doctype/process_statement_of_accounts/process_statement_of_accounts_accounts_receivable.html"
+	)
+
+	if doc.letter_head:
+		from dontmanage.www.printview import get_letter_head
+
+		letter_head = get_letter_head(doc, 0)
+
+	html = dontmanage.render_template(
+		template_path,
+		{
+			"filters": filters,
+			"data": res,
+			"report": {"report_name": doc.report, "columns": col},
+			"ageing": ageing[0] if (doc.include_ageing and ageing) else None,
+			"letter_head": letter_head if doc.letter_head else None,
+			"terms_and_conditions": dontmanage.db.get_value(
+				"Terms and Conditions", doc.terms_and_conditions, "terms"
+			)
+			if doc.terms_and_conditions
+			else None,
+		},
+	)
+
+	html = dontmanage.render_template(
+		base_template_path,
+		{"body": html, "css": get_print_style(), "title": "Statement For " + entry.customer},
+	)
+	return html
 
 
 def get_customers_based_on_territory_or_customer_group(customer_collection, collection_name):
@@ -155,7 +281,7 @@ def get_customers_based_on_territory_or_customer_group(customer_collection, coll
 	return dontmanage.get_list(
 		"Customer",
 		fields=["name", "customer_name", "email_id"],
-		filters=[[fields_dict[customer_collection], "IN", selected]],
+		filters=[["disabled", "=", 0], [fields_dict[customer_collection], "IN", selected]],
 	)
 
 
@@ -241,8 +367,6 @@ def fetch_customers(customer_collection, collection_name, primary_mandatory):
 		if int(primary_mandatory):
 			if primary_email == "":
 				continue
-		elif (billing_email == "") and (primary_email == ""):
-			continue
 
 		customer_list.append(
 			{
@@ -279,8 +403,12 @@ def get_customer_emails(customer_name, primary_mandatory, billing_and_primary=Tr
 			link.link_doctype='Customer'
 			and link.link_name=%s
 			and contact.is_billing_contact=1
+			{mcond}
 		ORDER BY
-			contact.creation desc""",
+			contact.creation desc
+		""".format(
+			mcond=get_match_cond("Contact")
+		),
 		customer_name,
 	)
 
@@ -310,16 +438,20 @@ def download_statements(document_name):
 
 
 @dontmanage.whitelist()
-def send_emails(document_name, from_scheduler=False):
+def send_emails(document_name, from_scheduler=False, posting_date=None):
 	doc = dontmanage.get_doc("Process Statement Of Accounts", document_name)
 	report = get_report_pdf(doc, consolidated=False)
 
 	if report:
 		for customer, report_pdf in report.items():
-			attachments = [{"fname": customer + ".pdf", "fcontent": report_pdf}]
+			context = get_context(customer, doc)
+			filename = dontmanage.render_template(doc.pdf_name, context)
+			attachments = [{"fname": filename + ".pdf", "fcontent": report_pdf}]
 
 			recipients, cc = get_recipients_and_cc(customer, doc)
-			context = get_context(customer, doc)
+			if not recipients:
+				continue
+
 			subject = dontmanage.render_template(doc.subject, context)
 			message = dontmanage.render_template(doc.body, context)
 
@@ -327,7 +459,7 @@ def send_emails(document_name, from_scheduler=False):
 				queue="short",
 				method=dontmanage.sendmail,
 				recipients=recipients,
-				sender=dontmanage.session.user,
+				sender=doc.sender or dontmanage.session.user,
 				cc=cc,
 				subject=subject,
 				message=message,
@@ -338,7 +470,7 @@ def send_emails(document_name, from_scheduler=False):
 			)
 
 		if doc.enable_auto_email and from_scheduler:
-			new_to_date = getdate(today())
+			new_to_date = getdate(posting_date or today())
 			if doc.frequency == "Weekly":
 				new_to_date = add_days(new_to_date, 7)
 			else:
@@ -347,8 +479,11 @@ def send_emails(document_name, from_scheduler=False):
 			doc.add_comment(
 				"Comment", "Emails sent on: " + dontmanage.utils.format_datetime(dontmanage.utils.now())
 			)
-			doc.db_set("to_date", new_to_date, commit=True)
-			doc.db_set("from_date", new_from_date, commit=True)
+			if doc.report == "General Ledger":
+				doc.db_set("to_date", new_to_date, commit=True)
+				doc.db_set("from_date", new_from_date, commit=True)
+			else:
+				doc.db_set("posting_date", new_to_date, commit=True)
 		return True
 	else:
 		return False
@@ -358,7 +493,8 @@ def send_emails(document_name, from_scheduler=False):
 def send_auto_email():
 	selected = dontmanage.get_list(
 		"Process Statement Of Accounts",
-		filters={"to_date": format_date(today()), "enable_auto_email": 1},
+		filters={"enable_auto_email": 1},
+		or_filters={"to_date": format_date(today()), "posting_date": format_date(today())},
 	)
 	for entry in selected:
 		send_emails(entry.name, from_scheduler=True)

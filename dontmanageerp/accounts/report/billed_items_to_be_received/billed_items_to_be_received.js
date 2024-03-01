@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports['Billed Items To Be Received'] = {
 	'filters': [
@@ -17,7 +17,7 @@ dontmanage.query_reports['Billed Items To Be Received'] = {
 			'fieldname': 'posting_date',
 			'fieldtype': 'Date',
 			'reqd': 1,
-			'default': get_today()
+			'default': dontmanage.datetime.get_today()
 		},
 		{
 			'label': __('Purchase Invoice'),

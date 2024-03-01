@@ -2,6 +2,10 @@ import dontmanage
 from dontmanage.model.db_query import DatabaseQuery
 from dontmanage.utils import cint, flt
 
+from dontmanageerp.stock.doctype.stock_reservation_entry.stock_reservation_entry import (
+	get_sre_reserved_qty_for_items_and_warehouses as get_reserved_stock_details,
+)
+
 
 @dontmanage.whitelist()
 def get_data(
@@ -57,6 +61,10 @@ def get_data(
 		limit_page_length=21,
 	)
 
+	item_code_list = [item_code] if item_code else [i.item_code for i in items]
+	warehouse_list = [warehouse] if warehouse else [i.warehouse for i in items]
+
+	sre_reserved_stock_details = get_reserved_stock_details(item_code_list, warehouse_list)
 	precision = cint(dontmanage.db.get_single_value("System Settings", "float_precision"))
 
 	for item in items:
@@ -70,6 +78,8 @@ def get_data(
 				"reserved_qty_for_production": flt(item.reserved_qty_for_production, precision),
 				"reserved_qty_for_sub_contract": flt(item.reserved_qty_for_sub_contract, precision),
 				"actual_qty": flt(item.actual_qty, precision),
+				"reserved_stock": flt(sre_reserved_stock_details.get((item.item_code, item.warehouse))),
 			}
 		)
+
 	return items

@@ -2,9 +2,6 @@
 # License: GNU General Public License v3. See license.txt
 
 import dontmanage
-import os
-import json
-from dontmanage.permissions import add_permission, update_permission_property
 from dontmanage.custom.doctype.custom_field.custom_field import create_custom_fields
 
 

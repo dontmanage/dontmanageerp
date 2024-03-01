@@ -9,15 +9,14 @@
   "production_item_tab",
   "item",
   "company",
-  "item_name",
   "uom",
+  "quantity",
   "cb0",
   "is_active",
   "is_default",
   "allow_alternative_item",
   "set_rate_of_sub_assembly_item_based_on_bom",
   "project",
-  "quantity",
   "image",
   "currency_detail",
   "rm_cost_as_per",
@@ -27,6 +26,8 @@
   "column_break_ivyw",
   "currency",
   "conversion_rate",
+  "materials_section",
+  "items",
   "section_break_21",
   "operations_section_section",
   "with_operations",
@@ -38,8 +39,6 @@
   "operating_cost_per_bom_quantity",
   "operations_section",
   "operations",
-  "materials_section",
-  "items",
   "scrap_section",
   "scrap_items_section",
   "scrap_items",
@@ -59,6 +58,7 @@
   "total_cost",
   "base_total_cost",
   "more_info_tab",
+  "item_name",
   "description",
   "column_break_27",
   "has_variants",
@@ -78,6 +78,10 @@
   "show_items",
   "show_operations",
   "web_long_description",
+  "reference_section",
+  "bom_creator",
+  "bom_creator_item",
+  "column_break_oxbz",
   "amended_from",
   "connections_tab"
  ],
@@ -192,6 +196,7 @@
    "options": "Quality Inspection Template"
   },
   {
+   "collapsible": 1,
    "fieldname": "currency_detail",
    "fieldtype": "Section Break",
    "label": "Cost Configuration"
@@ -213,6 +218,7 @@
    "options": "\nWork Order\nJob Card"
   },
   {
+   "default": "1",
    "fieldname": "conversion_rate",
    "fieldtype": "Float",
    "label": "Conversion Rate",
@@ -232,7 +238,7 @@
    "fieldname": "rm_cost_as_per",
    "fieldtype": "Select",
    "label": "Rate Of Materials Based On",
-   "options": "Valuation Rate\nLast Purchase Rate\nPrice List"
+   "options": "Valuation Rate\nLast Purchase Rate\nPrice List\nManual"
   },
   {
    "allow_on_submit": 1,
@@ -417,7 +423,7 @@
   {
    "collapsible": 1,
    "fieldname": "website_section",
-   "fieldtype": "Section Break",
+   "fieldtype": "Tab Break",
    "label": "Website"
   },
   {
@@ -482,7 +488,7 @@
   {
    "fieldname": "section_break_21",
    "fieldtype": "Tab Break",
-   "label": "Operations & Materials"
+   "label": "Operations"
   },
   {
    "fieldname": "column_break_23",
@@ -598,6 +604,32 @@
    "fieldname": "operating_cost_per_bom_quantity",
    "fieldtype": "Currency",
    "label": "Operating Cost Per BOM Quantity"
+  },
+  {
+   "fieldname": "reference_section",
+   "fieldtype": "Section Break",
+   "label": "Reference"
+  },
+  {
+   "fieldname": "bom_creator",
+   "fieldtype": "Link",
+   "label": "BOM Creator",
+   "no_copy": 1,
+   "options": "BOM Creator",
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "bom_creator_item",
+   "fieldtype": "Data",
+   "label": "BOM Creator Item",
+   "no_copy": 1,
+   "print_hide": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_oxbz",
+   "fieldtype": "Column Break"
   }
  ],
  "icon": "fa fa-sitemap",
@@ -605,7 +637,7 @@
  "image_field": "image",
  "is_submittable": 1,
  "links": [],
- "modified": "2023-02-13 17:31:37.504565",
+ "modified": "2023-12-26 19:34:08.159312",
  "modified_by": "Administrator",
  "module": "Manufacturing",
  "name": "BOM",

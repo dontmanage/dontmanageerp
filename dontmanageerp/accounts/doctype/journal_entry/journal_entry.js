@@ -8,7 +8,7 @@ dontmanage.provide("dontmanageerp.journal_entry");
 dontmanage.ui.form.on("Journal Entry", {
 	setup: function(frm) {
 		frm.add_fetch("bank_account", "account", "account");
-		frm.ignore_doctypes_on_cancel_all = ['Sales Invoice', 'Purchase Invoice', 'Journal Entry', "Repost Payment Ledger"];
+		frm.ignore_doctypes_on_cancel_all = ['Sales Invoice', 'Purchase Invoice', 'Journal Entry', "Repost Payment Ledger", 'Asset', 'Asset Movement', 'Asset Depreciation Schedule', "Repost Accounting Ledger", "Unreconcile Payment", "Unreconcile Payment Entries", "Bank Transaction"];
 	},
 
 	refresh: function(frm) {
@@ -50,8 +50,18 @@ dontmanage.ui.form.on("Journal Entry", {
 					frm.trigger("make_inter_company_journal_entry");
 				}, __('Make'));
 		}
-	},
 
+		dontmanageerp.accounts.unreconcile_payment.add_unreconcile_btn(frm);
+	},
+	before_save: function(frm) {
+		if ((frm.doc.docstatus == 0) && (!frm.doc.is_system_generated)) {
+			let payment_entry_references = frm.doc.accounts.filter(elem => (elem.reference_type == "Payment Entry"));
+			if (payment_entry_references.length > 0) {
+				let rows = payment_entry_references.map(x => "#"+x.idx);
+				dontmanage.throw(__("Rows: {0} have 'Payment Entry' as reference_type. This should not be set manually.", [dontmanage.utils.comma_and(rows)]));
+			}
+		}
+	},
 	make_inter_company_journal_entry: function(frm) {
 		var d = new dontmanage.ui.Dialog({
 			title: __("Select Company"),
@@ -264,11 +274,11 @@ dontmanageerp.accounts.JournalEntry = class JournalEntry extends dontmanage.ui.f
 			}
 
 			if(jvd.party_type && jvd.party) {
-				var party_field = "";
+				let party_field = "";
 				if(jvd.reference_type.indexOf("Sales")===0) {
-					var party_field = "customer";
+					party_field = "customer";
 				} else if (jvd.reference_type.indexOf("Purchase")===0) {
-					var party_field = "supplier";
+					party_field = "supplier";
 				}
 
 				if (party_field) {
@@ -368,7 +378,7 @@ cur_frm.cscript.update_totals = function(doc) {
 		td += flt(accounts[i].debit, precision("debit", accounts[i]));
 		tc += flt(accounts[i].credit, precision("credit", accounts[i]));
 	}
-	var doc = locals[doc.doctype][doc.name];
+	doc = locals[doc.doctype][doc.name];
 	doc.total_debit = td;
 	doc.total_credit = tc;
 	doc.difference = flt((td - tc), precision("difference"));
@@ -575,7 +585,7 @@ $.extend(dontmanageerp.journal_entry, {
 		};
 		if(!frm.doc.multi_currency) {
 			$.extend(filters, {
-				account_currency: dontmanage.get_doc(":Company", frm.doc.company).default_currency
+				account_currency: ['in', [dontmanage.get_doc(":Company", frm.doc.company).default_currency, null]]
 			});
 		}
 		return { filters: filters };

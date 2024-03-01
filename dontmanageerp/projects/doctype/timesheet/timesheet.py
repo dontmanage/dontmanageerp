@@ -25,11 +25,17 @@ class Timesheet(Document):
 	def validate(self):
 		self.set_status()
 		self.validate_dates()
+		self.calculate_hours()
 		self.validate_time_logs()
 		self.update_cost()
 		self.calculate_total_amounts()
 		self.calculate_percentage_billed()
 		self.set_dates()
+
+	def calculate_hours(self):
+		for row in self.time_logs:
+			if row.to_time and row.from_time:
+				row.hours = time_diff_in_hours(row.to_time, row.from_time)
 
 	def calculate_total_amounts(self):
 		self.total_hours = 0.0
@@ -65,13 +71,19 @@ class Timesheet(Document):
 		if args.is_billable:
 			if flt(args.billing_hours) == 0.0:
 				args.billing_hours = args.hours
+			elif flt(args.billing_hours) > flt(args.hours):
+				dontmanage.msgprint(
+					_("Warning - Row {0}: Billing Hours are more than Actual Hours").format(args.idx),
+					indicator="orange",
+					alert=True,
+				)
 		else:
 			args.billing_hours = 0
 
 	def set_status(self):
 		self.status = {"0": "Draft", "1": "Submitted", "2": "Cancelled"}[str(self.docstatus or 0)]
 
-		if self.per_billed == 100:
+		if flt(self.per_billed, self.precision("per_billed")) >= 100.0:
 			self.status = "Billed"
 
 		if self.sales_invoice:
@@ -368,6 +380,7 @@ def make_sales_invoice(source_name, item_code=None, customer=None, currency=None
 	billing_rate = billing_amount / hours
 
 	target.company = timesheet.company
+	target.project = timesheet.parent_project
 	if customer:
 		target.customer = customer
 
@@ -383,6 +396,9 @@ def make_sales_invoice(source_name, item_code=None, customer=None, currency=None
 				"timesheets",
 				{
 					"time_sheet": timesheet.name,
+					"project_name": time_log.project_name,
+					"from_time": time_log.from_time,
+					"to_time": time_log.to_time,
 					"billing_hours": time_log.billing_hours,
 					"billing_amount": time_log.billing_amount,
 					"timesheet_detail": time_log.name,

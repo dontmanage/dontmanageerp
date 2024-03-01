@@ -17,7 +17,7 @@ dontmanage.query_reports["IRS 1099"] = {
 			"label": __("Fiscal Year"),
 			"fieldtype": "Link",
 			"options": "Fiscal Year",
-			"default": dontmanage.defaults.get_user_default("fiscal_year"),
+			"default": dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today()),
 			"reqd": 1,
 			"width": 80,
 		},

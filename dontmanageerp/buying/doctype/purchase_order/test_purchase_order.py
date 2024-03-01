@@ -16,7 +16,7 @@ from dontmanageerp.buying.doctype.purchase_order.purchase_order import (
 	make_purchase_invoice as make_pi_from_po,
 )
 from dontmanageerp.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
-from dontmanageerp.controllers.accounts_controller import update_child_qty_rate
+from dontmanageerp.controllers.accounts_controller import InvalidQtyError, update_child_qty_rate
 from dontmanageerp.manufacturing.doctype.blanket_order.test_blanket_order import make_blanket_order
 from dontmanageerp.stock.doctype.item.test_item import make_item
 from dontmanageerp.stock.doctype.material_request.material_request import make_purchase_order
@@ -27,6 +27,21 @@ from dontmanageerp.stock.doctype.purchase_receipt.purchase_receipt import (
 
 
 class TestPurchaseOrder(DontManageTestCase):
+	def test_purchase_order_qty(self):
+		po = create_purchase_order(qty=1, do_not_save=True)
+		po.append(
+			"items",
+			{
+				"item_code": "_Test Item",
+				"qty": -1,
+				"rate": 10,
+			},
+		)
+		self.assertRaises(dontmanage.NonNegativeError, po.save)
+
+		po.items[1].qty = 0
+		self.assertRaises(InvalidQtyError, po.save)
+
 	def test_make_purchase_receipt(self):
 		po = create_purchase_order(do_not_submit=True)
 		self.assertRaises(dontmanage.ValidationError, make_purchase_receipt, po.name)
@@ -92,7 +107,7 @@ class TestPurchaseOrder(DontManageTestCase):
 
 		dontmanage.db.set_value("Item", "_Test Item", "over_delivery_receipt_allowance", 0)
 		dontmanage.db.set_value("Item", "_Test Item", "over_billing_allowance", 0)
-		dontmanage.db.set_value("Accounts Settings", None, "over_billing_allowance", 0)
+		dontmanage.db.set_single_value("Accounts Settings", "over_billing_allowance", 0)
 
 	def test_update_remove_child_linked_to_mr(self):
 		"""Test impact on linked PO and MR on deleting/updating row."""
@@ -581,7 +596,7 @@ class TestPurchaseOrder(DontManageTestCase):
 		)
 
 	def test_group_same_items(self):
-		dontmanage.db.set_value("Buying Settings", None, "allow_multiple_items", 1)
+		dontmanage.db.set_single_value("Buying Settings", "allow_multiple_items", 1)
 		dontmanage.get_doc(
 			{
 				"doctype": "Purchase Order",
@@ -799,6 +814,30 @@ class TestPurchaseOrder(DontManageTestCase):
 		# To test if the PO does NOT have a Blanket Order
 		self.assertEqual(po_doc.items[0].blanket_order, None)
 
+	def test_blanket_order_on_po_close_and_open(self):
+		# Step - 1: Create Blanket Order
+		bo = make_blanket_order(blanket_order_type="Purchasing", quantity=10, rate=10)
+
+		# Step - 2: Create Purchase Order
+		po = create_purchase_order(
+			item_code="_Test Item", qty=5, against_blanket_order=1, against_blanket=bo.name
+		)
+
+		bo.load_from_db()
+		self.assertEqual(bo.items[0].ordered_qty, 5)
+
+		# Step - 3: Close Purchase Order
+		po.update_status("Closed")
+
+		bo.load_from_db()
+		self.assertEqual(bo.items[0].ordered_qty, 0)
+
+		# Step - 4: Re-Open Purchase Order
+		po.update_status("Re-open")
+
+		bo.load_from_db()
+		self.assertEqual(bo.items[0].ordered_qty, 5)
+
 	def test_payment_terms_are_fetched_when_creating_purchase_invoice(self):
 		from dontmanageerp.accounts.doctype.payment_entry.test_payment_entry import (
 			create_payment_terms_template,
@@ -836,8 +875,8 @@ class TestPurchaseOrder(DontManageTestCase):
 		)
 		from dontmanageerp.stock.doctype.delivery_note.delivery_note import make_inter_company_purchase_receipt
 
-		dontmanage.db.set_value("Selling Settings", None, "maintain_same_sales_rate", 1)
-		dontmanage.db.set_value("Buying Settings", None, "maintain_same_rate", 1)
+		dontmanage.db.set_single_value("Selling Settings", "maintain_same_sales_rate", 1)
+		dontmanage.db.set_single_value("Buying Settings", "maintain_same_rate", 1)
 
 		prepare_data_for_internal_transfer()
 		supplier = "_Test Internal Supplier 2"
@@ -900,6 +939,135 @@ class TestPurchaseOrder(DontManageTestCase):
 		po = create_purchase_order(item_code="_Test Variant Item", qty=1, rate=100, do_not_save=1)
 
 		self.assertRaises(dontmanage.ValidationError, po.save)
+
+	def test_update_items_for_subcontracting_purchase_order(self):
+		from dontmanageerp.controllers.tests.test_subcontracting_controller import (
+			get_subcontracting_order,
+			make_bom_for_subcontracted_items,
+			make_raw_materials,
+			make_service_items,
+			make_subcontracted_items,
+		)
+
+		def update_items(po, qty):
+			trans_items = [po.items[0].as_dict()]
+			trans_items[0]["qty"] = qty
+			trans_items[0]["fg_item_qty"] = qty
+			trans_items = json.dumps(trans_items, default=str)
+
+			return update_child_qty_rate(
+				po.doctype,
+				trans_items,
+				po.name,
+			)
+
+		make_subcontracted_items()
+		make_raw_materials()
+		make_service_items()
+		make_bom_for_subcontracted_items()
+
+		service_items = [
+			{
+				"warehouse": "_Test Warehouse - _TC",
+				"item_code": "Subcontracted Service Item 7",
+				"qty": 10,
+				"rate": 100,
+				"fg_item": "Subcontracted Item SA7",
+				"fg_item_qty": 10,
+			},
+		]
+		po = create_purchase_order(
+			rm_items=service_items,
+			is_subcontracted=1,
+			supplier_warehouse="_Test Warehouse 1 - _TC",
+		)
+
+		update_items(po, qty=20)
+		po.reload()
+
+		# Test - 1: Items should be updated as there is no Subcontracting Order against PO
+		self.assertEqual(po.items[0].qty, 20)
+		self.assertEqual(po.items[0].fg_item_qty, 20)
+
+		sco = get_subcontracting_order(po_name=po.name, warehouse="_Test Warehouse - _TC")
+
+		# Test - 2: ValidationError should be raised as there is Subcontracting Order against PO
+		self.assertRaises(dontmanage.ValidationError, update_items, po=po, qty=30)
+
+		sco.reload()
+		sco.cancel()
+		po.reload()
+
+		update_items(po, qty=30)
+		po.reload()
+
+		# Test - 3: Items should be updated as the Subcontracting Order is cancelled
+		self.assertEqual(po.items[0].qty, 30)
+		self.assertEqual(po.items[0].fg_item_qty, 30)
+
+	@change_settings("Buying Settings", {"auto_create_subcontracting_order": 1})
+	def test_auto_create_subcontracting_order(self):
+		from dontmanageerp.controllers.tests.test_subcontracting_controller import (
+			make_bom_for_subcontracted_items,
+			make_raw_materials,
+			make_service_items,
+			make_subcontracted_items,
+		)
+
+		make_subcontracted_items()
+		make_raw_materials()
+		make_service_items()
+		make_bom_for_subcontracted_items()
+
+		service_items = [
+			{
+				"warehouse": "_Test Warehouse - _TC",
+				"item_code": "Subcontracted Service Item 7",
+				"qty": 10,
+				"rate": 100,
+				"fg_item": "Subcontracted Item SA7",
+				"fg_item_qty": 10,
+			},
+		]
+		po = create_purchase_order(
+			rm_items=service_items,
+			is_subcontracted=1,
+			supplier_warehouse="_Test Warehouse 1 - _TC",
+		)
+
+		self.assertTrue(dontmanage.db.get_value("Subcontracting Order", {"purchase_order": po.name}))
+
+	def test_po_billed_amount_against_return_entry(self):
+		from dontmanageerp.accounts.doctype.purchase_invoice.purchase_invoice import make_debit_note
+
+		# Create a Purchase Order and Fully Bill it
+		po = create_purchase_order()
+		pi = make_pi_from_po(po.name)
+		pi.insert()
+		pi.submit()
+
+		# Debit Note - 50% Qty & enable updating PO billed amount
+		pi_return = make_debit_note(pi.name)
+		pi_return.items[0].qty = -5
+		pi_return.update_billed_amount_in_purchase_order = 1
+		pi_return.submit()
+
+		# Check if the billed amount reduced
+		po.reload()
+		self.assertEqual(po.per_billed, 50)
+
+		pi_return.reload()
+		pi_return.cancel()
+
+		# Debit Note - 50% Qty & disable updating PO billed amount
+		pi_return = make_debit_note(pi.name)
+		pi_return.items[0].qty = -5
+		pi_return.update_billed_amount_in_purchase_order = 0
+		pi_return.submit()
+
+		# Check if the billed amount stayed the same
+		po.reload()
+		self.assertEqual(po.per_billed, 100)
 
 
 def prepare_data_for_internal_transfer():
@@ -1001,6 +1169,7 @@ def create_purchase_order(**args):
 				"schedule_date": add_days(nowdate(), 1),
 				"include_exploded_items": args.get("include_exploded_items", 1),
 				"against_blanket_order": args.against_blanket_order,
+				"against_blanket": args.against_blanket,
 				"material_request": args.material_request,
 				"material_request_item": args.material_request_item,
 			},

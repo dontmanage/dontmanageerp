@@ -7,6 +7,24 @@ from dontmanage.model.document import Document
 
 
 class QualityFeedback(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.quality_management.doctype.quality_feedback_parameter.quality_feedback_parameter import (
+			QualityFeedbackParameter,
+		)
+
+		document_name: DF.DynamicLink
+		document_type: DF.Literal["User", "Customer"]
+		parameters: DF.Table[QualityFeedbackParameter]
+		template: DF.Link
+	# end: auto-generated types
+
 	@dontmanage.whitelist()
 	def set_parameters(self):
 		if self.template and not getattr(self, "parameters", []):

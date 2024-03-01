@@ -1,10 +1,9 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
 
-{% include 'dontmanageerp/stock/landed_taxes_and_charges_common.js' %};
-
 dontmanage.provide("dontmanageerp.stock");
 
+dontmanageerp.landed_cost_taxes_and_charges.setup_triggers("Landed Cost Voucher");
 dontmanageerp.stock.LandedCostVoucher = class LandedCostVoucher extends dontmanageerp.stock.StockController {
 	setup() {
 		var me = this;

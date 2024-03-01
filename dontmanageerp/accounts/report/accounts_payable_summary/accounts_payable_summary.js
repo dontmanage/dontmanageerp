@@ -72,10 +72,27 @@ dontmanage.query_reports["Accounts Payable Summary"] = {
 			}
 		},
 		{
-			"fieldname":"supplier",
-			"label": __("Supplier"),
-			"fieldtype": "Link",
-			"options": "Supplier"
+			"fieldname":"party_type",
+			"label": __("Party Type"),
+			"fieldtype": "Autocomplete",
+			options: get_party_type_options(),
+			on_change: function() {
+				dontmanage.query_report.set_filter_value('party', "");
+				dontmanage.query_report.toggle_filter_display('supplier_group', dontmanage.query_report.get_filter_value('party_type') !== "Supplier");
+			}
+		},
+		{
+			"fieldname":"party",
+			"label": __("Party"),
+			"fieldtype": "MultiSelectList",
+			get_data: function(txt) {
+				if (!dontmanage.query_report.filters) return;
+
+				let party_type = dontmanage.query_report.get_filter_value('party_type');
+				if (!party_type) return;
+
+				return dontmanage.db.get_link_options(party_type, txt);
+			},
 		},
 		{
 			"fieldname":"payment_terms_template",
@@ -93,6 +110,11 @@ dontmanage.query_reports["Accounts Payable Summary"] = {
 			"fieldname":"based_on_payment_terms",
 			"label": __("Based On Payment Terms"),
 			"fieldtype": "Check",
+		},
+		{
+			"fieldname": "for_revaluation_journals",
+			"label": __("Revaluation Journals"),
+			"fieldtype": "Check",
 		}
 	],
 
@@ -105,3 +127,15 @@ dontmanage.query_reports["Accounts Payable Summary"] = {
 }
 
 dontmanageerp.utils.add_dimensions('Accounts Payable Summary', 9);
+
+function get_party_type_options() {
+	let options = [];
+	dontmanage.db.get_list(
+		"Party Type", {filters:{"account_type": "Payable"}, fields:['name']}
+	).then((res) => {
+		res.forEach((party_type) => {
+			options.push(party_type.name);
+		});
+	});
+	return options;
+}

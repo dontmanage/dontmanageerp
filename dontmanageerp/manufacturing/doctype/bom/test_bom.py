@@ -698,6 +698,74 @@ class TestBOM(DontManageTestCase):
 		bom.update_cost()
 		self.assertFalse(bom.flags.cost_updated)
 
+	def test_bom_with_service_item_cost(self):
+		from dontmanageerp.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
+
+		rm_item = make_item(properties={"is_stock_item": 1, "valuation_rate": 1000.0}).name
+
+		service_item = make_item(properties={"is_stock_item": 0}).name
+
+		fg_item = make_item(properties={"is_stock_item": 1}).name
+
+		from dontmanageerp.manufacturing.doctype.production_plan.test_production_plan import make_bom
+
+		bom = make_bom(item=fg_item, raw_materials=[rm_item, service_item], do_not_save=True)
+		bom.rm_cost_as_per = "Valuation Rate"
+
+		for row in bom.items:
+			if row.item_code == service_item:
+				row.rate = 566.00
+			else:
+				row.rate = 800.00
+
+		bom.save()
+
+		for row in bom.items:
+			if row.item_code == service_item:
+				self.assertEqual(row.is_stock_item, 0)
+				self.assertEqual(row.rate, 566.00)
+			else:
+				self.assertEqual(row.is_stock_item, 1)
+
+	def test_do_not_include_manufacturing_and_fixed_items(self):
+		from dontmanageerp.manufacturing.doctype.bom.bom import item_query
+
+		if not dontmanage.db.exists("Asset Category", "Computers-Test"):
+			doc = dontmanage.get_doc({"doctype": "Asset Category", "asset_category_name": "Computers-Test"})
+			doc.flags.ignore_mandatory = True
+			doc.insert()
+
+		for item_code, properties in {
+			"_Test RM Item 1 Do Not Include In Manufacture": {
+				"is_stock_item": 1,
+				"include_item_in_manufacturing": 0,
+			},
+			"_Test RM Item 2 Fixed Asset Item": {
+				"is_fixed_asset": 1,
+				"is_stock_item": 0,
+				"asset_category": "Computers-Test",
+			},
+			"_Test RM Item 3 Manufacture Item": {"is_stock_item": 1, "include_item_in_manufacturing": 1},
+		}.items():
+			make_item(item_code, properties)
+
+		data = item_query(
+			"Item",
+			txt="_Test RM Item",
+			searchfield="name",
+			start=0,
+			page_len=20000,
+			filters={"include_item_in_manufacturing": 1, "is_fixed_asset": 0},
+		)
+
+		items = []
+		for row in data:
+			items.append(row[0])
+
+		self.assertTrue("_Test RM Item 1 Do Not Include In Manufacture" not in items)
+		self.assertTrue("_Test RM Item 2 Fixed Asset Item" not in items)
+		self.assertTrue("_Test RM Item 3 Manufacture Item" in items)
+
 
 def get_default_bom(item_code="_Test FG Item 2"):
 	return dontmanage.db.get_value("BOM", {"item": item_code, "is_active": 1, "is_default": 1})

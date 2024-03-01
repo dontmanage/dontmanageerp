@@ -43,8 +43,20 @@ def execute():
 		dontmanage.delete_doc("Number Card", card, ignore_missing=True, force=True)
 
 	doctypes = dontmanage.get_all("DocType", {"module": "education", "custom": 0}, pluck="name")
+
 	for doctype in doctypes:
 		dontmanage.delete_doc("DocType", doctype, ignore_missing=True)
+
+	titles = [
+		"Fees",
+		"Student Admission",
+		"Grant Application",
+		"Chapter",
+		"Certification Application",
+	]
+	items = dontmanage.get_all("Portal Menu Item", filters=[["title", "in", titles]], pluck="name")
+	for item in items:
+		dontmanage.delete_doc("Portal Menu Item", item, ignore_missing=True, force=True)
 
 	dontmanage.delete_doc("Module Def", "Education", ignore_missing=True, force=True)
 

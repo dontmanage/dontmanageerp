@@ -22,6 +22,36 @@ class DuplicateBudgetError(dontmanage.ValidationError):
 
 
 class Budget(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.budget_account.budget_account import BudgetAccount
+
+		accounts: DF.Table[BudgetAccount]
+		action_if_accumulated_monthly_budget_exceeded: DF.Literal["", "Stop", "Warn", "Ignore"]
+		action_if_accumulated_monthly_budget_exceeded_on_mr: DF.Literal["", "Stop", "Warn", "Ignore"]
+		action_if_accumulated_monthly_budget_exceeded_on_po: DF.Literal["", "Stop", "Warn", "Ignore"]
+		action_if_annual_budget_exceeded: DF.Literal["", "Stop", "Warn", "Ignore"]
+		action_if_annual_budget_exceeded_on_mr: DF.Literal["", "Stop", "Warn", "Ignore"]
+		action_if_annual_budget_exceeded_on_po: DF.Literal["", "Stop", "Warn", "Ignore"]
+		amended_from: DF.Link | None
+		applicable_on_booking_actual_expenses: DF.Check
+		applicable_on_material_request: DF.Check
+		applicable_on_purchase_order: DF.Check
+		budget_against: DF.Literal["", "Cost Center", "Project"]
+		company: DF.Link
+		cost_center: DF.Link | None
+		fiscal_year: DF.Link
+		monthly_distribution: DF.Link | None
+		naming_series: DF.Data | None
+		project: DF.Link | None
+	# end: auto-generated types
+
 	def validate(self):
 		if not self.get(dontmanage.scrub(self.budget_against)):
 			dontmanage.throw(_("{0} is mandatory").format(self.budget_against))
@@ -59,7 +89,7 @@ class Budget(Document):
 		account_list = []
 		for d in self.get("accounts"):
 			if d.account:
-				account_details = dontmanage.db.get_value(
+				account_details = dontmanage.get_cached_value(
 					"Account", d.account, ["is_group", "company", "report_type"], as_dict=1
 				)
 
@@ -125,14 +155,27 @@ def validate_expense_against_budget(args, expense_amount=0):
 	if not args.account:
 		return
 
-	for budget_against in ["project", "cost_center"] + get_accounting_dimensions():
+	default_dimensions = [
+		{
+			"fieldname": "project",
+			"document_type": "Project",
+		},
+		{
+			"fieldname": "cost_center",
+			"document_type": "Cost Center",
+		},
+	]
+
+	for dimension in default_dimensions + get_accounting_dimensions(as_list=False):
+		budget_against = dimension.get("fieldname")
+
 		if (
 			args.get(budget_against)
 			and args.account
 			and dontmanage.db.get_value("Account", {"name": args.account, "root_type": "Expense"})
 		):
 
-			doctype = dontmanage.unscrub(budget_against)
+			doctype = dimension.get("document_type")
 
 			if dontmanage.get_cached_value("DocType", doctype, "is_tree"):
 				lft, rgt = dontmanage.db.get_value(doctype, args.get(budget_against), ["lft", "rgt"])
@@ -311,7 +354,7 @@ def get_other_condition(args, budget, for_doc):
 
 	if args.get("fiscal_year"):
 		date_field = "schedule_date" if for_doc == "Material Request" else "transaction_date"
-		start_date, end_date = dontmanage.db.get_value(
+		start_date, end_date = dontmanage.get_cached_value(
 			"Fiscal Year", args.get("fiscal_year"), ["year_start_date", "year_end_date"]
 		)
 
@@ -386,7 +429,7 @@ def get_accumulated_monthly_budget(monthly_distribution, posting_date, fiscal_ye
 		):
 			distribution.setdefault(d.month, d.percentage_allocation)
 
-	dt = dontmanage.db.get_value("Fiscal Year", fiscal_year, "year_start_date")
+	dt = dontmanage.get_cached_value("Fiscal Year", fiscal_year, "year_start_date")
 	accumulated_percentage = 0.0
 
 	while dt <= getdate(posting_date):

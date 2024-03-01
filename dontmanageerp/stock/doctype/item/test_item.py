@@ -522,39 +522,25 @@ class TestItem(DontManageTestCase):
 		self.assertEqual(factor, 1.0)
 
 	def test_item_variant_by_manufacturer(self):
-		fields = [{"field_name": "description"}, {"field_name": "variant_based_on"}]
-		set_item_variant_settings(fields)
+		template = make_item(
+			"_Test Item Variant By Manufacturer", {"has_variants": 1, "variant_based_on": "Manufacturer"}
+		).name
 
-		if dontmanage.db.exists("Item", "_Test Variant Mfg"):
-			dontmanage.delete_doc("Item", "_Test Variant Mfg")
-		if dontmanage.db.exists("Item", "_Test Variant Mfg-1"):
-			dontmanage.delete_doc("Item", "_Test Variant Mfg-1")
-		if dontmanage.db.exists("Manufacturer", "MSG1"):
-			dontmanage.delete_doc("Manufacturer", "MSG1")
+		for manufacturer in ["DFSS", "DASA", "ASAAS"]:
+			if not dontmanage.db.exists("Manufacturer", manufacturer):
+				m_doc = dontmanage.new_doc("Manufacturer")
+				m_doc.short_name = manufacturer
+				m_doc.insert()
 
-		template = dontmanage.get_doc(
-			dict(
-				doctype="Item",
-				item_code="_Test Variant Mfg",
-				has_variant=1,
-				item_group="Products",
-				variant_based_on="Manufacturer",
-			)
-		).insert()
+		self.assertFalse(dontmanage.db.exists("Item Manufacturer", {"manufacturer": "DFSS"}))
+		variant = get_variant(template, manufacturer="DFSS", manufacturer_part_no="DFSS-123")
 
-		manufacturer = dontmanage.get_doc(dict(doctype="Manufacturer", short_name="MSG1")).insert()
+		item_manufacturer = dontmanage.db.exists(
+			"Item Manufacturer", {"manufacturer": "DFSS", "item_code": variant.name}
+		)
+		self.assertTrue(item_manufacturer)
 
-		variant = get_variant(template.name, manufacturer=manufacturer.name)
-		self.assertEqual(variant.item_code, "_Test Variant Mfg-1")
-		self.assertEqual(variant.description, "_Test Variant Mfg")
-		self.assertEqual(variant.manufacturer, "MSG1")
-		variant.insert()
-
-		variant = get_variant(template.name, manufacturer=manufacturer.name, manufacturer_part_no="007")
-		self.assertEqual(variant.item_code, "_Test Variant Mfg-2")
-		self.assertEqual(variant.description, "_Test Variant Mfg")
-		self.assertEqual(variant.manufacturer, "MSG1")
-		self.assertEqual(variant.manufacturer_part_no, "007")
+		dontmanage.delete_doc("Item Manufacturer", item_manufacturer)
 
 	def test_stock_exists_against_template_item(self):
 		stock_item = dontmanage.get_all("Stock Ledger Entry", fields=["item_code"], limit=1)
@@ -579,6 +565,20 @@ class TestItem(DontManageTestCase):
 			{
 				"barcode": "ARBITRARY_TEXT",
 			},
+			{"barcode": "72527273070", "barcode_type": "UPC-A"},
+			{"barcode": "123456", "barcode_type": "CODE-39"},
+			{"barcode": "401268452363", "barcode_type": "EAN"},
+			{"barcode": "90311017", "barcode_type": "EAN"},
+			{"barcode": "73513537", "barcode_type": "EAN"},
+			{"barcode": "0123456789012", "barcode_type": "GS1"},
+			{"barcode": "2211564566668", "barcode_type": "GTIN"},
+			{"barcode": "0256480249", "barcode_type": "ISBN"},
+			{"barcode": "0192552570", "barcode_type": "ISBN-10"},
+			{"barcode": "9781234567897", "barcode_type": "ISBN-13"},
+			{"barcode": "9771234567898", "barcode_type": "ISSN"},
+			{"barcode": "4581171967072", "barcode_type": "JAN"},
+			{"barcode": "12345678", "barcode_type": "PZN"},
+			{"barcode": "725272730706", "barcode_type": "UPC"},
 		]
 		create_item(item_code)
 		for barcode_properties in barcode_properties_list:
@@ -893,6 +893,8 @@ def create_item(
 	opening_stock=0,
 	is_fixed_asset=0,
 	asset_category=None,
+	buying_cost_center=None,
+	selling_cost_center=None,
 	company="_Test Company",
 ):
 	if not dontmanage.db.exists("Item", item_code):
@@ -910,7 +912,15 @@ def create_item(
 		item.is_purchase_item = is_purchase_item
 		item.is_customer_provided_item = is_customer_provided_item
 		item.customer = customer or ""
-		item.append("item_defaults", {"default_warehouse": warehouse, "company": company})
+		item.append(
+			"item_defaults",
+			{
+				"default_warehouse": warehouse,
+				"company": company,
+				"selling_cost_center": selling_cost_center,
+				"buying_cost_center": buying_cost_center,
+			},
+		)
 		item.save()
 	else:
 		item = dontmanage.get_doc("Item", item_code)

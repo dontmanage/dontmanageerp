@@ -8,7 +8,7 @@ import dontmanage
 from dontmanage import _, msgprint
 from dontmanage.desk.notifications import clear_doctype_notifications
 from dontmanage.model.mapper import get_mapped_doc
-from dontmanage.utils import cint, cstr, flt
+from dontmanage.utils import cint, cstr, flt, get_link_to_form
 
 from dontmanageerp.accounts.doctype.sales_invoice.sales_invoice import (
 	unlink_inter_company_doc,
@@ -28,11 +28,145 @@ from dontmanageerp.setup.doctype.item_group.item_group import get_item_group_def
 from dontmanageerp.stock.doctype.item.item import get_item_defaults, get_last_purchase_details
 from dontmanageerp.stock.stock_balance import get_ordered_qty, update_bin_qty
 from dontmanageerp.stock.utils import get_bin
+from dontmanageerp.subcontracting.doctype.subcontracting_bom.subcontracting_bom import (
+	get_subcontracting_boms_for_finished_goods,
+)
 
 form_grid_templates = {"items": "templates/form_grid/item_grid.html"}
 
 
 class PurchaseOrder(BuyingController):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.payment_schedule.payment_schedule import PaymentSchedule
+		from dontmanageerp.accounts.doctype.pricing_rule_detail.pricing_rule_detail import PricingRuleDetail
+		from dontmanageerp.accounts.doctype.purchase_taxes_and_charges.purchase_taxes_and_charges import (
+			PurchaseTaxesandCharges,
+		)
+		from dontmanageerp.buying.doctype.purchase_order_item.purchase_order_item import PurchaseOrderItem
+		from dontmanageerp.buying.doctype.purchase_order_item_supplied.purchase_order_item_supplied import (
+			PurchaseOrderItemSupplied,
+		)
+
+		additional_discount_percentage: DF.Float
+		address_display: DF.SmallText | None
+		advance_paid: DF.Currency
+		amended_from: DF.Link | None
+		apply_discount_on: DF.Literal["", "Grand Total", "Net Total"]
+		apply_tds: DF.Check
+		auto_repeat: DF.Link | None
+		base_discount_amount: DF.Currency
+		base_grand_total: DF.Currency
+		base_in_words: DF.Data | None
+		base_net_total: DF.Currency
+		base_rounded_total: DF.Currency
+		base_rounding_adjustment: DF.Currency
+		base_tax_withholding_net_total: DF.Currency
+		base_taxes_and_charges_added: DF.Currency
+		base_taxes_and_charges_deducted: DF.Currency
+		base_total: DF.Currency
+		base_total_taxes_and_charges: DF.Currency
+		billing_address: DF.Link | None
+		billing_address_display: DF.SmallText | None
+		buying_price_list: DF.Link | None
+		company: DF.Link
+		contact_display: DF.SmallText | None
+		contact_email: DF.SmallText | None
+		contact_mobile: DF.SmallText | None
+		contact_person: DF.Link | None
+		conversion_rate: DF.Float
+		cost_center: DF.Link | None
+		currency: DF.Link
+		customer: DF.Link | None
+		customer_contact_display: DF.SmallText | None
+		customer_contact_email: DF.Code | None
+		customer_contact_mobile: DF.SmallText | None
+		customer_contact_person: DF.Link | None
+		customer_name: DF.Data | None
+		disable_rounded_total: DF.Check
+		discount_amount: DF.Currency
+		from_date: DF.Date | None
+		grand_total: DF.Currency
+		group_same_items: DF.Check
+		ignore_pricing_rule: DF.Check
+		in_words: DF.Data | None
+		incoterm: DF.Link | None
+		inter_company_order_reference: DF.Link | None
+		is_internal_supplier: DF.Check
+		is_old_subcontracting_flow: DF.Check
+		is_subcontracted: DF.Check
+		items: DF.Table[PurchaseOrderItem]
+		language: DF.Data | None
+		letter_head: DF.Link | None
+		named_place: DF.Data | None
+		naming_series: DF.Literal["PUR-ORD-.YYYY.-"]
+		net_total: DF.Currency
+		order_confirmation_date: DF.Date | None
+		order_confirmation_no: DF.Data | None
+		other_charges_calculation: DF.LongText | None
+		party_account_currency: DF.Link | None
+		payment_schedule: DF.Table[PaymentSchedule]
+		payment_terms_template: DF.Link | None
+		per_billed: DF.Percent
+		per_received: DF.Percent
+		plc_conversion_rate: DF.Float
+		price_list_currency: DF.Link | None
+		pricing_rules: DF.Table[PricingRuleDetail]
+		project: DF.Link | None
+		ref_sq: DF.Link | None
+		represents_company: DF.Link | None
+		rounded_total: DF.Currency
+		rounding_adjustment: DF.Currency
+		scan_barcode: DF.Data | None
+		schedule_date: DF.Date | None
+		select_print_heading: DF.Link | None
+		set_from_warehouse: DF.Link | None
+		set_reserve_warehouse: DF.Link | None
+		set_warehouse: DF.Link | None
+		shipping_address: DF.Link | None
+		shipping_address_display: DF.SmallText | None
+		shipping_rule: DF.Link | None
+		status: DF.Literal[
+			"",
+			"Draft",
+			"On Hold",
+			"To Receive and Bill",
+			"To Bill",
+			"To Receive",
+			"Completed",
+			"Cancelled",
+			"Closed",
+			"Delivered",
+		]
+		supplied_items: DF.Table[PurchaseOrderItemSupplied]
+		supplier: DF.Link
+		supplier_address: DF.Link | None
+		supplier_name: DF.Data | None
+		supplier_warehouse: DF.Link | None
+		tax_category: DF.Link | None
+		tax_withholding_category: DF.Link | None
+		tax_withholding_net_total: DF.Currency
+		taxes: DF.Table[PurchaseTaxesandCharges]
+		taxes_and_charges: DF.Link | None
+		taxes_and_charges_added: DF.Currency
+		taxes_and_charges_deducted: DF.Currency
+		tc_name: DF.Link | None
+		terms: DF.TextEditor | None
+		title: DF.Data
+		to_date: DF.Date | None
+		total: DF.Currency
+		total_net_weight: DF.Float
+		total_qty: DF.Float
+		total_taxes_and_charges: DF.Currency
+		transaction_date: DF.Date
+	# end: auto-generated types
+
 	def __init__(self, *args, **kwargs):
 		super(PurchaseOrder, self).__init__(*args, **kwargs)
 		self.status_updater = [
@@ -52,6 +186,7 @@ class PurchaseOrder(BuyingController):
 	def onload(self):
 		supplier_tds = dontmanage.db.get_value("Supplier", self.supplier, "tax_withholding_category")
 		self.set_onload("supplier_tds", supplier_tds)
+		self.set_onload("can_update_items", self.can_update_items())
 
 	def validate(self):
 		super(PurchaseOrder, self).validate()
@@ -86,6 +221,10 @@ class PurchaseOrder(BuyingController):
 		self.reset_default_field_value("set_warehouse", "items", "warehouse")
 
 	def validate_with_previous_doc(self):
+		mri_compare_fields = [["project", "="], ["item_code", "="]]
+		if self.is_subcontracted:
+			mri_compare_fields = [["project", "="]]
+
 		super(PurchaseOrder, self).validate_with_previous_doc(
 			{
 				"Supplier Quotation": {
@@ -108,7 +247,7 @@ class PurchaseOrder(BuyingController):
 				},
 				"Material Request Item": {
 					"ref_dn_field": "material_request_item",
-					"compare_fields": [["project", "="], ["item_code", "="]],
+					"compare_fields": mri_compare_fields,
 					"is_child_table": True,
 				},
 			}
@@ -282,23 +421,6 @@ class PurchaseOrder(BuyingController):
 				check_list.append(d.material_request)
 				check_on_hold_or_closed_status("Material Request", d.material_request)
 
-	def update_requested_qty(self):
-		material_request_map = {}
-		for d in self.get("items"):
-			if d.material_request_item:
-				material_request_map.setdefault(d.material_request, []).append(d.material_request_item)
-
-		for mr, mr_item_rows in material_request_map.items():
-			if mr and mr_item_rows:
-				mr_obj = dontmanage.get_doc("Material Request", mr)
-
-				if mr_obj.status in ["Stopped", "Cancelled"]:
-					dontmanage.throw(
-						_("Material Request {0} is cancelled or stopped").format(mr), dontmanage.InvalidStatusError
-					)
-
-				mr_obj.update_requested_qty(mr_item_rows)
-
 	def update_ordered_qty(self, po_item_rows=None):
 		"""update requested qty (before ordered_qty is updated)"""
 		item_wh_list = []
@@ -330,6 +452,8 @@ class PurchaseOrder(BuyingController):
 		self.update_requested_qty()
 		self.update_ordered_qty()
 		self.update_reserved_qty_for_subcontract()
+		self.update_subcontracting_order_status()
+		self.update_blanket_order()
 		self.notify_update()
 		clear_doctype_notifications(self)
 
@@ -340,7 +464,9 @@ class PurchaseOrder(BuyingController):
 			self.update_status_updater()
 
 		self.update_prevdoc_status()
-		self.update_requested_qty()
+		if not self.is_subcontracted or self.is_old_subcontracting_flow:
+			self.update_requested_qty()
+
 		self.update_ordered_qty()
 		self.validate_budget()
 		self.update_reserved_qty_for_subcontract()
@@ -352,6 +478,8 @@ class PurchaseOrder(BuyingController):
 		self.update_blanket_order()
 
 		update_linked_doc(self.doctype, self.name, self.inter_company_order_reference)
+
+		self.auto_create_subcontracting_order()
 
 	def on_cancel(self):
 		self.ignore_linked_doctypes = ("GL Entry", "Payment Ledger Entry")
@@ -372,7 +500,9 @@ class PurchaseOrder(BuyingController):
 
 		# Must be called after updating ordered qty in Material Request
 		# bin uses Material Request Items to recalculate & update
-		self.update_requested_qty()
+		if not self.is_subcontracted or self.is_old_subcontracting_flow:
+			self.update_requested_qty()
+
 		self.update_ordered_qty()
 
 		self.update_blanket_order()
@@ -450,7 +580,54 @@ class PurchaseOrder(BuyingController):
 		else:
 			self.db_set("per_received", 0, update_modified=False)
 
+	def set_service_items_for_finished_goods(self):
+		if not self.is_subcontracted or self.is_old_subcontracting_flow:
+			return
 
+		finished_goods_without_service_item = {
+			d.fg_item for d in self.items if (not d.item_code and d.fg_item)
+		}
+
+		if subcontracting_boms := get_subcontracting_boms_for_finished_goods(
+			finished_goods_without_service_item
+		):
+			for item in self.items:
+				if not item.item_code and item.fg_item in subcontracting_boms:
+					subcontracting_bom = subcontracting_boms[item.fg_item]
+
+					item.item_code = subcontracting_bom.service_item
+					item.qty = flt(item.fg_item_qty) * flt(subcontracting_bom.conversion_factor)
+					item.uom = subcontracting_bom.service_item_uom
+
+	def can_update_items(self) -> bool:
+		result = True
+
+		if self.is_subcontracted and not self.is_old_subcontracting_flow:
+			if dontmanage.db.exists(
+				"Subcontracting Order", {"purchase_order": self.name, "docstatus": ["!=", 2]}
+			):
+				result = False
+
+		return result
+
+	def auto_create_subcontracting_order(self):
+		if self.is_subcontracted and not self.is_old_subcontracting_flow:
+			if dontmanage.db.get_single_value("Buying Settings", "auto_create_subcontracting_order"):
+				make_subcontracting_order(self.name, save=True, notify=True)
+
+	def update_subcontracting_order_status(self):
+		from dontmanageerp.subcontracting.doctype.subcontracting_order.subcontracting_order import (
+			update_subcontracting_order_status as update_sco_status,
+		)
+
+		if self.is_subcontracted and not self.is_old_subcontracting_flow:
+			sco = dontmanage.db.get_value("Subcontracting Order", {"purchase_order": self.name, "docstatus": 1})
+
+			if sco:
+				update_sco_status(sco, "Closed" if self.status == "Closed" else None)
+
+
+@dontmanage.request_cache
 def item_last_purchase_rate(name, conversion_rate, item_code, conversion_factor=1.0):
 	"""get last purchase rate for an item"""
 
@@ -522,6 +699,9 @@ def make_purchase_receipt(source_name, target_doc=None):
 					"bom": "bom",
 					"material_request": "material_request",
 					"material_request_item": "material_request_item",
+					"sales_order": "sales_order",
+					"sales_order_item": "sales_order_item",
+					"wip_composite_asset": "wip_composite_asset",
 				},
 				"postprocess": update_item,
 				"condition": lambda doc: abs(doc.received_qty) < abs(doc.qty)
@@ -532,8 +712,6 @@ def make_purchase_receipt(source_name, target_doc=None):
 		target_doc,
 		set_missing_values,
 	)
-
-	doc.set_onload("ignore_price_list", True)
 
 	return doc
 
@@ -598,6 +776,7 @@ def get_mapped_purchase_invoice(source_name, target_doc=None, ignore_permissions
 			"field_map": {
 				"name": "po_detail",
 				"parent": "purchase_order",
+				"wip_composite_asset": "wip_composite_asset",
 			},
 			"postprocess": update_item,
 			"condition": lambda doc: (doc.base_amount == 0 or abs(doc.billed_amt) < abs(doc.amount)),
@@ -613,7 +792,6 @@ def get_mapped_purchase_invoice(source_name, target_doc=None, ignore_permissions
 		postprocess,
 		ignore_permissions=ignore_permissions,
 	)
-	doc.set_onload("ignore_price_list", True)
 
 	return doc
 
@@ -648,8 +826,30 @@ def make_inter_company_sales_order(source_name, target_doc=None):
 
 
 @dontmanage.whitelist()
-def make_subcontracting_order(source_name, target_doc=None):
-	return get_mapped_subcontracting_order(source_name, target_doc)
+def make_subcontracting_order(
+	source_name, target_doc=None, save=False, submit=False, notify=False
+):
+	target_doc = get_mapped_subcontracting_order(source_name, target_doc)
+
+	if (save or submit) and dontmanage.has_permission(target_doc.doctype, "create"):
+		target_doc.save()
+
+		if submit and dontmanage.has_permission(target_doc.doctype, "submit", target_doc):
+			try:
+				target_doc.submit()
+			except Exception as e:
+				target_doc.add_comment("Comment", _("Submit Action Failed") + "<br><br>" + str(e))
+
+		if notify:
+			dontmanage.msgprint(
+				_("Subcontracting Order {0} created.").format(
+					get_link_to_form(target_doc.doctype, target_doc.name)
+				),
+				indicator="green",
+				alert=True,
+			)
+
+	return target_doc
 
 
 def get_mapped_subcontracting_order(source_name, target_doc=None):
@@ -675,7 +875,11 @@ def get_mapped_subcontracting_order(source_name, target_doc=None):
 			},
 			"Purchase Order Item": {
 				"doctype": "Subcontracting Order Service Item",
-				"field_map": {},
+				"field_map": {
+					"name": "purchase_order_item",
+					"material_request": "material_request",
+					"material_request_item": "material_request_item",
+				},
 				"field_no_map": [],
 			},
 		},
@@ -701,8 +905,8 @@ def get_mapped_subcontracting_order(source_name, target_doc=None):
 
 @dontmanage.whitelist()
 def is_subcontracting_order_created(po_name) -> bool:
-	count = dontmanage.db.count(
-		"Subcontracting Order", {"purchase_order": po_name, "status": ["not in", ["Draft", "Cancelled"]]}
+	return (
+		True
+		if dontmanage.db.exists("Subcontracting Order", {"purchase_order": po_name, "docstatus": ["=", 1]})
+		else False
 	)
-
-	return True if count else False

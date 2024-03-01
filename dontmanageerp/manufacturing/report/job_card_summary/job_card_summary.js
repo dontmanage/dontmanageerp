@@ -1,6 +1,6 @@
 // Copyright (c) 2016, DontManage and contributors
 // For license information, please see license.txt
-/* eslint-disable */
+
 
 dontmanage.query_reports["Job Card Summary"] = {
 	"filters": [
@@ -17,7 +17,7 @@ dontmanage.query_reports["Job Card Summary"] = {
 			label: __("Fiscal Year"),
 			fieldtype: "Link",
 			options: "Fiscal Year",
-			default: dontmanage.defaults.get_user_default("fiscal_year"),
+			default: dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today()),
 			reqd: 1,
 			on_change: function(query_report) {
 				var fiscal_year = query_report.get_values().fiscal_year;
@@ -37,14 +37,14 @@ dontmanage.query_reports["Job Card Summary"] = {
 			label: __("From Posting Date"),
 			fieldname:"from_date",
 			fieldtype: "Date",
-			default: dontmanage.defaults.get_user_default("year_start_date"),
+			default: dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[1],
 			reqd: 1
 		},
 		{
 			label: __("To Posting Date"),
 			fieldname:"to_date",
 			fieldtype: "Date",
-			default: dontmanage.defaults.get_user_default("year_end_date"),
+			default: dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[2],
 			reqd: 1,
 		},
 		{

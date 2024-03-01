@@ -50,7 +50,7 @@ dontmanage.ui.form.on('BOM Operation', {
 
 	workstation: function(frm, cdt, cdn) {
 		const d = locals[cdt][cdn];
-
+		if(!d.workstation) return;
 		dontmanage.call({
 			"method": "dontmanage.client.get",
 			args: {

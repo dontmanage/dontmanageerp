@@ -48,7 +48,8 @@ dontmanage.ui.form.on("BOM", {
 			return {
 				query: "dontmanageerp.manufacturing.doctype.bom.bom.item_query",
 				filters: {
-					"item_code": doc.item
+					"include_item_in_manufacturing": 1,
+					"is_fixed_asset": 0
 				}
 			};
 		});
@@ -411,7 +412,6 @@ dontmanage.ui.form.on("BOM", {
 		}
 
 		frm.set_value("process_loss_qty", qty);
-		frm.set_value("add_process_loss_cost_in_fg", qty ? 1: 0);
 	}
 });
 
@@ -653,7 +653,7 @@ dontmanage.ui.form.on("BOM Operation", "operation", function(frm, cdt, cdn) {
 
 dontmanage.ui.form.on("BOM Operation", "workstation", function(frm, cdt, cdn) {
 	var d = locals[cdt][cdn];
-
+	if(!d.workstation) return;
 	dontmanage.call({
 		"method": "dontmanage.client.get",
 		args: {

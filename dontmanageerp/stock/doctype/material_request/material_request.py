@@ -23,8 +23,54 @@ form_grid_templates = {"items": "templates/form_grid/material_request_grid.html"
 
 
 class MaterialRequest(BuyingController):
-	def get_feed(self):
-		return
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.stock.doctype.material_request_item.material_request_item import MaterialRequestItem
+
+		amended_from: DF.Link | None
+		company: DF.Link
+		customer: DF.Link | None
+		items: DF.Table[MaterialRequestItem]
+		job_card: DF.Link | None
+		letter_head: DF.Link | None
+		material_request_type: DF.Literal[
+			"Purchase", "Material Transfer", "Material Issue", "Manufacture", "Customer Provided"
+		]
+		naming_series: DF.Literal["MAT-MR-.YYYY.-"]
+		per_ordered: DF.Percent
+		per_received: DF.Percent
+		scan_barcode: DF.Data | None
+		schedule_date: DF.Date | None
+		select_print_heading: DF.Link | None
+		set_from_warehouse: DF.Link | None
+		set_warehouse: DF.Link | None
+		status: DF.Literal[
+			"",
+			"Draft",
+			"Submitted",
+			"Stopped",
+			"Cancelled",
+			"Pending",
+			"Partially Ordered",
+			"Partially Received",
+			"Ordered",
+			"Issued",
+			"Transferred",
+			"Received",
+		]
+		tc_name: DF.Link | None
+		terms: DF.TextEditor | None
+		title: DF.Data | None
+		transaction_date: DF.Date
+		transfer_status: DF.Literal["", "Not Started", "In Transit", "Completed"]
+		work_order: DF.Link | None
+	# end: auto-generated types
 
 	def check_if_already_pulled(self):
 		pass
@@ -118,12 +164,14 @@ class MaterialRequest(BuyingController):
 		"""Set title as comma separated list of items"""
 		if not self.title:
 			items = ", ".join([d.item_name for d in self.items][:3])
-			self.title = _("{0} Request for {1}").format(self.material_request_type, items)[:100]
+			self.title = _("{0} Request for {1}").format(_(self.material_request_type), items)[:100]
 
 	def on_submit(self):
-		self.update_requested_qty()
 		self.update_requested_qty_in_production_plan()
-		if self.material_request_type == "Purchase":
+		self.update_requested_qty()
+		if self.material_request_type == "Purchase" and dontmanage.db.exists(
+			"Budget", {"applicable_on_material_request": 1, "docstatus": 1}
+		):
 			self.validate_budget()
 
 	def before_save(self):
@@ -181,8 +229,8 @@ class MaterialRequest(BuyingController):
 				)
 
 	def on_cancel(self):
-		self.update_requested_qty()
 		self.update_requested_qty_in_production_plan()
+		self.update_requested_qty()
 
 	def get_mr_items_ordered_qty(self, mr_items):
 		mr_items_ordered_qty = {}
@@ -228,7 +276,8 @@ class MaterialRequest(BuyingController):
 					d.ordered_qty = flt(mr_items_ordered_qty.get(d.name))
 
 					if mr_qty_allowance:
-						allowed_qty = d.qty + (d.qty * (mr_qty_allowance / 100))
+						allowed_qty = flt((d.qty + (d.qty * (mr_qty_allowance / 100))), d.precision("ordered_qty"))
+
 						if d.ordered_qty and d.ordered_qty > allowed_qty:
 							dontmanage.throw(
 								_(
@@ -273,7 +322,13 @@ class MaterialRequest(BuyingController):
 				item_wh_list.append([d.item_code, d.warehouse])
 
 		for item_code, warehouse in item_wh_list:
-			update_bin_qty(item_code, warehouse, {"indented_qty": get_indented_qty(item_code, warehouse)})
+			update_bin_qty(
+				item_code,
+				warehouse,
+				{
+					"indented_qty": get_indented_qty(item_code, warehouse),
+				},
+			)
 
 	def update_requested_qty_in_production_plan(self):
 		production_plans = []
@@ -397,6 +452,7 @@ def make_purchase_order(source_name, target_doc=None, args=None):
 					["uom", "uom"],
 					["sales_order", "sales_order"],
 					["sales_order_item", "sales_order_item"],
+					["wip_composite_asset", "wip_composite_asset"],
 				],
 				"postprocess": update_item,
 				"condition": select_item,
@@ -406,6 +462,7 @@ def make_purchase_order(source_name, target_doc=None, args=None):
 		postprocess,
 	)
 
+	doclist.set_onload("load_after_mapping", False)
 	return doclist
 
 
@@ -619,8 +676,18 @@ def make_stock_entry(source_name, target_doc=None):
 		target.set_transfer_qty()
 		target.set_actual_qty()
 		target.calculate_rate_and_amount(raise_error_if_no_rate=False)
-		target.set_stock_entry_type()
+		target.stock_entry_type = target.purpose
 		target.set_job_card_data()
+
+		if source.job_card:
+			job_card_details = dontmanage.get_all(
+				"Job Card", filters={"name": source.job_card}, fields=["bom_no", "for_quantity"]
+			)
+
+			if job_card_details and job_card_details[0]:
+				target.bom_no = job_card_details[0].bom_no
+				target.fg_completed_qty = job_card_details[0].for_quantity
+				target.from_bom = 1
 
 	doclist = get_mapped_doc(
 		"Material Request",
@@ -642,7 +709,10 @@ def make_stock_entry(source_name, target_doc=None):
 					"job_card_item": "job_card_item",
 				},
 				"postprocess": update_item,
-				"condition": lambda doc: doc.ordered_qty < doc.stock_qty,
+				"condition": lambda doc: (
+					flt(doc.ordered_qty, doc.precision("ordered_qty"))
+					< flt(doc.stock_qty, doc.precision("ordered_qty"))
+				),
 			},
 		},
 		target_doc,
@@ -685,6 +755,7 @@ def raise_work_orders(material_request):
 				)
 
 				wo_order.set_work_order_operations()
+				wo_order.flags.ignore_mandatory = True
 				wo_order.save()
 
 				work_orders.append(wo_order.name)

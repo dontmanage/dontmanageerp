@@ -2,12 +2,71 @@ dontmanage.provide("dontmanageerp.financial_statements");
 
 dontmanageerp.financial_statements = {
 	"filters": get_filters(),
-	"formatter": function(value, row, column, data, default_formatter) {
+	"baseData": null,
+	"formatter": function(value, row, column, data, default_formatter, filter) {
+		if(dontmanage.query_report.get_filter_value("selected_view") == "Growth" && data && column.colIndex >= 3){
+			//Assuming that the first three columns are s.no, account name and the very first year of the accounting values, to calculate the relative percentage values of the successive columns.
+			const lastAnnualValue = row[column.colIndex - 1].content;
+			const currentAnnualvalue = data[column.fieldname];
+			if(currentAnnualvalue == undefined) return 'NA'; //making this not applicable for undefined/null values
+			let annualGrowth = 0;
+			if(lastAnnualValue == 0 && currentAnnualvalue > 0){
+				//If the previous year value is 0 and the current value is greater than 0
+				annualGrowth = 1;
+			}
+			else if(lastAnnualValue > 0){
+				annualGrowth  = (currentAnnualvalue - lastAnnualValue) / lastAnnualValue;
+			}
+
+			const growthPercent = (Math.round(annualGrowth*10000)/100); //calculating the rounded off percentage
+
+			value = $(`<span>${((growthPercent >=0)? '+':'' )+growthPercent+'%'}</span>`);
+			if(growthPercent < 0){
+				value = $(value).addClass("text-danger");
+			}
+			else{
+				value = $(value).addClass("text-success");
+			}
+			value = $(value).wrap("<p></p>").parent().html();
+
+			return value;
+		}
+		else if(dontmanage.query_report.get_filter_value("selected_view") == "Margin" && data){
+			if(column.fieldname =="account" && data.account_name == __("Income")){
+				//Taking the total income from each column (for all the financial years) as the base (100%)
+				this.baseData = row;
+			}
+			if(column.colIndex >= 2){
+				//Assuming that the first two columns are s.no and account name, to calculate the relative percentage values of the successive columns.
+				const currentAnnualvalue = data[column.fieldname];
+				const baseValue = this.baseData[column.colIndex].content;
+				if(currentAnnualvalue == undefined || baseValue <= 0) return 'NA';
+				const marginPercent = Math.round((currentAnnualvalue/baseValue)*10000)/100;
+
+				value = $(`<span>${marginPercent+'%'}</span>`);
+				if(marginPercent < 0)
+					value = $(value).addClass("text-danger");
+				else
+					value = $(value).addClass("text-success");
+				value = $(value).wrap("<p></p>").parent().html();
+				return value;
+			}
+
+		}
+
 		if (data && column.fieldname=="account") {
 			value = data.account_name || value;
 
-			column.link_onclick =
-				"dontmanageerp.financial_statements.open_general_ledger(" + JSON.stringify(data) + ")";
+			if (filter && filter?.text && filter?.type == "contains") {
+				if (!value.toLowerCase().includes(filter.text)) {
+					return value;
+				}
+			}
+
+			if (data.account) {
+				column.link_onclick =
+					"dontmanageerp.financial_statements.open_general_ledger(" + JSON.stringify(data) + ")";
+			}
 			column.is_tree = true;
 		}
 
@@ -56,7 +115,7 @@ dontmanageerp.financial_statements = {
 		// dropdown for links to other financial statements
 		dontmanageerp.financial_statements.filters = get_filters()
 
-		let fiscal_year = dontmanage.defaults.get_user_default("fiscal_year")
+		let fiscal_year = dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today());
 
 		dontmanage.model.with_doc("Fiscal Year", fiscal_year, function(r) {
 			var fy = dontmanage.model.get_doc("Fiscal Year", fiscal_year);
@@ -66,22 +125,24 @@ dontmanageerp.financial_statements = {
 			});
 		});
 
-		const views_menu = report.page.add_custom_button_group(__('Financial Statements'));
+		if (report.page){
+			const views_menu = report.page.add_custom_button_group(__('Financial Statements'));
 
-		report.page.add_custom_menu_item(views_menu, __("Balance Sheet"), function() {
-			var filters = report.get_values();
-			dontmanage.set_route('query-report', 'Balance Sheet', {company: filters.company});
-		});
+			report.page.add_custom_menu_item(views_menu, __("Balance Sheet"), function() {
+				var filters = report.get_values();
+				dontmanage.set_route('query-report', 'Balance Sheet', {company: filters.company});
+			});
 
-		report.page.add_custom_menu_item(views_menu, __("Profit and Loss"), function() {
-			var filters = report.get_values();
-			dontmanage.set_route('query-report', 'Profit and Loss Statement', {company: filters.company});
-		});
+			report.page.add_custom_menu_item(views_menu, __("Profit and Loss"), function() {
+				var filters = report.get_values();
+				dontmanage.set_route('query-report', 'Profit and Loss Statement', {company: filters.company});
+			});
 
-		report.page.add_custom_menu_item(views_menu, __("Cash Flow Statement"), function() {
-			var filters = report.get_values();
-			dontmanage.set_route('query-report', 'Cash Flow', {company: filters.company});
-		});
+			report.page.add_custom_menu_item(views_menu, __("Cash Flow Statement"), function() {
+				var filters = report.get_values();
+				dontmanage.set_route('query-report', 'Cash Flow', {company: filters.company});
+			});
+		}
 	}
 };
 
@@ -137,7 +198,6 @@ function get_filters() {
 			"label": __("Start Year"),
 			"fieldtype": "Link",
 			"options": "Fiscal Year",
-			"default": dontmanage.defaults.get_user_default("fiscal_year"),
 			"reqd": 1,
 			"depends_on": "eval:doc.filter_based_on == 'Fiscal Year'"
 		},
@@ -146,7 +206,6 @@ function get_filters() {
 			"label": __("End Year"),
 			"fieldtype": "Link",
 			"options": "Fiscal Year",
-			"default": dontmanage.defaults.get_user_default("fiscal_year"),
 			"reqd": 1,
 			"depends_on": "eval:doc.filter_based_on == 'Fiscal Year'"
 		},
@@ -182,8 +241,26 @@ function get_filters() {
 					company: dontmanage.query_report.get_filter_value("company")
 				});
 			}
+		},
+		{
+			"fieldname": "project",
+			"label": __("Project"),
+			"fieldtype": "MultiSelectList",
+			get_data: function(txt) {
+				return dontmanage.db.get_link_options('Project', txt, {
+					company: dontmanage.query_report.get_filter_value("company")
+				});
+			},
 		}
 	]
+
+	// Dynamically set 'default' values for fiscal year filters
+	let fy_filters = filters.filter(x=>{return ["from_fiscal_year", "to_fiscal_year"].includes(x.fieldname);})
+	let fiscal_year = dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), false, true);
+	if (fiscal_year) {
+		let fy = dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), false, false);
+		fy_filters.forEach(x=>{x.default = fy;})
+	}
 
 	return filters;
 }

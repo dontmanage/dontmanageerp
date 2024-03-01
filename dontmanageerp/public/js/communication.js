@@ -13,7 +13,7 @@ dontmanage.ui.form.on("Communication", {
 				dontmanage.confirm(__(confirm_msg, [__("Issue")]), () => {
 					frm.trigger('make_issue_from_communication');
 				})
-			}, "Create");
+			}, __("Create"));
 		}
 
 		if(!in_list(["Lead", "Opportunity"], frm.doc.reference_doctype)) {

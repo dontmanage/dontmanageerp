@@ -69,6 +69,73 @@ class TransactionExists(dontmanage.ValidationError):
 
 
 class PromotionalScheme(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.campaign_item.campaign_item import CampaignItem
+		from dontmanageerp.accounts.doctype.customer_group_item.customer_group_item import CustomerGroupItem
+		from dontmanageerp.accounts.doctype.customer_item.customer_item import CustomerItem
+		from dontmanageerp.accounts.doctype.pricing_rule_brand.pricing_rule_brand import PricingRuleBrand
+		from dontmanageerp.accounts.doctype.pricing_rule_item_code.pricing_rule_item_code import (
+			PricingRuleItemCode,
+		)
+		from dontmanageerp.accounts.doctype.pricing_rule_item_group.pricing_rule_item_group import (
+			PricingRuleItemGroup,
+		)
+		from dontmanageerp.accounts.doctype.promotional_scheme_price_discount.promotional_scheme_price_discount import (
+			PromotionalSchemePriceDiscount,
+		)
+		from dontmanageerp.accounts.doctype.promotional_scheme_product_discount.promotional_scheme_product_discount import (
+			PromotionalSchemeProductDiscount,
+		)
+		from dontmanageerp.accounts.doctype.sales_partner_item.sales_partner_item import SalesPartnerItem
+		from dontmanageerp.accounts.doctype.supplier_group_item.supplier_group_item import SupplierGroupItem
+		from dontmanageerp.accounts.doctype.supplier_item.supplier_item import SupplierItem
+		from dontmanageerp.accounts.doctype.territory_item.territory_item import TerritoryItem
+
+		applicable_for: DF.Literal[
+			"",
+			"Customer",
+			"Customer Group",
+			"Territory",
+			"Sales Partner",
+			"Campaign",
+			"Supplier",
+			"Supplier Group",
+		]
+		apply_on: DF.Literal["", "Item Code", "Item Group", "Brand", "Transaction"]
+		apply_rule_on_other: DF.Literal["", "Item Code", "Item Group", "Brand"]
+		brands: DF.Table[PricingRuleBrand]
+		buying: DF.Check
+		campaign: DF.TableMultiSelect[CampaignItem]
+		company: DF.Link
+		currency: DF.Link | None
+		customer: DF.TableMultiSelect[CustomerItem]
+		customer_group: DF.TableMultiSelect[CustomerGroupItem]
+		disable: DF.Check
+		is_cumulative: DF.Check
+		item_groups: DF.Table[PricingRuleItemGroup]
+		items: DF.Table[PricingRuleItemCode]
+		mixed_conditions: DF.Check
+		other_brand: DF.Link | None
+		other_item_code: DF.Link | None
+		other_item_group: DF.Link | None
+		price_discount_slabs: DF.Table[PromotionalSchemePriceDiscount]
+		product_discount_slabs: DF.Table[PromotionalSchemeProductDiscount]
+		sales_partner: DF.TableMultiSelect[SalesPartnerItem]
+		selling: DF.Check
+		supplier: DF.TableMultiSelect[SupplierItem]
+		supplier_group: DF.TableMultiSelect[SupplierGroupItem]
+		territory: DF.TableMultiSelect[TerritoryItem]
+		valid_from: DF.Date | None
+		valid_upto: DF.Date | None
+	# end: auto-generated types
+
 	def validate(self):
 		if not self.selling and not self.buying:
 			dontmanage.throw(_("Either 'Selling' or 'Buying' must be selected"), title=_("Mandatory"))

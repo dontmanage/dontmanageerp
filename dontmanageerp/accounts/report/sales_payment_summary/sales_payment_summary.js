@@ -29,7 +29,6 @@ dontmanage.query_reports["Sales Payment Summary"] = {
 			"label": __("Owner"),
 			"fieldtype": "Link",
 			"options": "User",
-			"defaults": user
 		},
 		{
 			"fieldname":"is_pos",

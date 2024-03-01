@@ -20,7 +20,7 @@ dontmanage.query_reports["Sales Person-wise Transaction Summary"] = {
 			fieldname: "from_date",
 			label: __("From Date"),
 			fieldtype: "Date",
-			default: dontmanage.defaults.get_user_default("year_start_date"),
+			default: dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[1],
 		},
 		{
 			fieldname:"to_date",

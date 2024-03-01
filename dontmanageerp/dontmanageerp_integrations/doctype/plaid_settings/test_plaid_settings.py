@@ -7,7 +7,6 @@ import unittest
 import dontmanage
 from dontmanage.utils.response import json_handler
 
-from dontmanageerp.accounts.doctype.journal_entry.journal_entry import get_default_bank_cash_account
 from dontmanageerp.dontmanageerp_integrations.doctype.plaid_settings.plaid_settings import (
 	add_account_subtype,
 	add_account_type,
@@ -32,7 +31,7 @@ class TestPlaidSettings(unittest.TestCase):
 				dontmanage.delete_doc(doctype, d.name, force=True)
 
 	def test_plaid_disabled(self):
-		dontmanage.db.set_value("Plaid Settings", None, "enabled", 0)
+		dontmanage.db.set_single_value("Plaid Settings", "enabled", 0)
 		self.assertTrue(get_plaid_configuration() == "disabled")
 
 	def test_add_account_type(self):
@@ -42,40 +41,6 @@ class TestPlaidSettings(unittest.TestCase):
 	def test_add_account_subtype(self):
 		add_account_subtype("loan")
 		self.assertEqual(dontmanage.get_doc("Bank Account Subtype", "loan").name, "loan")
-
-	def test_default_bank_account(self):
-		if not dontmanage.db.exists("Bank", "Citi"):
-			dontmanage.get_doc({"doctype": "Bank", "bank_name": "Citi"}).insert()
-
-		bank_accounts = {
-			"account": {
-				"subtype": "checking",
-				"mask": "0000",
-				"type": "depository",
-				"id": "6GbM6RRQgdfy3lAqGz4JUnpmR948WZFg8DjQK",
-				"name": "Plaid Checking",
-			},
-			"account_id": "6GbM6RRQgdfy3lAqGz4JUnpmR948WZFg8DjQK",
-			"link_session_id": "db673d75-61aa-442a-864f-9b3f174f3725",
-			"accounts": [
-				{
-					"type": "depository",
-					"subtype": "checking",
-					"mask": "0000",
-					"id": "6GbM6RRQgdfy3lAqGz4JUnpmR948WZFg8DjQK",
-					"name": "Plaid Checking",
-				}
-			],
-			"institution": {"institution_id": "ins_6", "name": "Citi"},
-		}
-
-		bank = json.dumps(dontmanage.get_doc("Bank", "Citi").as_dict(), default=json_handler)
-		company = dontmanage.db.get_single_value("Global Defaults", "default_company")
-		dontmanage.db.set_value("Company", company, "default_bank_account", None)
-
-		self.assertRaises(
-			dontmanage.ValidationError, add_bank_accounts, response=bank_accounts, bank=bank, company=company
-		)
 
 	def test_new_transaction(self):
 		if not dontmanage.db.exists("Bank", "Citi"):
@@ -105,14 +70,6 @@ class TestPlaidSettings(unittest.TestCase):
 
 		bank = json.dumps(dontmanage.get_doc("Bank", "Citi").as_dict(), default=json_handler)
 		company = dontmanage.db.get_single_value("Global Defaults", "default_company")
-
-		if dontmanage.db.get_value("Company", company, "default_bank_account") is None:
-			dontmanage.db.set_value(
-				"Company",
-				company,
-				"default_bank_account",
-				get_default_bank_cash_account(company, "Cash").get("account"),
-			)
 
 		add_bank_accounts(bank_accounts, bank, company)
 

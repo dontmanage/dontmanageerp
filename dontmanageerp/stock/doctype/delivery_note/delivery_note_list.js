@@ -24,7 +24,7 @@ dontmanage.listview_settings['Delivery Note'] = {
 					if (!doc.docstatus) {
 						dontmanage.throw(__("Cannot create a Delivery Trip from Draft documents."));
 					}
-				};
+				}
 
 				dontmanage.new_doc("Delivery Trip")
 					.then(() => {
@@ -51,7 +51,7 @@ dontmanage.listview_settings['Delivery Note'] = {
 							}
 						});
 					})
-			};
+			}
 		};
 
 		// doclist.page.add_actions_menu_item(__('Create Delivery Trip'), action, false);
@@ -66,4 +66,4 @@ dontmanage.listview_settings['Delivery Note'] = {
 			dontmanageerp.bulk_transaction_processing.create(doclist, "Delivery Note", "Packing Slip");
 		});
 	}
-};
+}

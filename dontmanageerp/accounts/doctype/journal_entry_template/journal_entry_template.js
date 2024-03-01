@@ -2,6 +2,21 @@
 // For license information, please see license.txt
 
 dontmanage.ui.form.on("Journal Entry Template", {
+	onload: function(frm) {
+		if(frm.is_new()) {
+			dontmanage.call({
+				type: "GET",
+				method: "dontmanageerp.accounts.doctype.journal_entry_template.journal_entry_template.get_naming_series",
+				callback: function(r){
+					if(r.message) {
+						frm.set_df_property("naming_series", "options", r.message.split("\n"));
+						frm.set_value("naming_series", r.message.split("\n")[0]);
+						frm.refresh_field("naming_series");
+					}
+				}
+			});
+		}
+	},
 	refresh: function(frm) {
 		dontmanage.model.set_default_values(frm.doc);
 
@@ -13,23 +28,11 @@ dontmanage.ui.form.on("Journal Entry Template", {
 
 			if(!frm.doc.multi_currency) {
 				$.extend(filters, {
-					account_currency: dontmanage.get_doc(":Company", frm.doc.company).default_currency
+					account_currency: ['in', [dontmanage.get_doc(":Company", frm.doc.company).default_currency, null]]
 				});
 			}
 
 			return { filters: filters };
-		});
-
-		dontmanage.call({
-			type: "GET",
-			method: "dontmanageerp.accounts.doctype.journal_entry_template.journal_entry_template.get_naming_series",
-			callback: function(r){
-				if(r.message){
-					frm.set_df_property("naming_series", "options", r.message.split("\n"));
-					frm.set_value("naming_series", r.message.split("\n")[0]);
-					frm.refresh_field("naming_series");
-				}
-			}
 		});
 	},
 	voucher_type: function(frm) {

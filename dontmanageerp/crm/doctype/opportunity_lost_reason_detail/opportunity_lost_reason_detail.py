@@ -7,4 +7,18 @@ from dontmanage.model.document import Document
 
 
 class OpportunityLostReasonDetail(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		lost_reason: DF.Link | None
+		parent: DF.Data
+		parentfield: DF.Data
+		parenttype: DF.Data
+	# end: auto-generated types
+
 	pass

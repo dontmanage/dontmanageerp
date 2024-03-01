@@ -4,28 +4,32 @@
 import dontmanage
 from dontmanage.tests.utils import DontManageTestCase
 
-from dontmanageerp.accounts.doctype.bank_transaction.test_bank_transaction import (
-	create_loan_and_repayment,
-)
 from dontmanageerp.accounts.report.bank_reconciliation_statement.bank_reconciliation_statement import (
 	execute,
 )
-from dontmanageerp.loan_management.doctype.loan.test_loan import create_loan_accounts
+from dontmanageerp.tests.utils import if_lending_app_installed
 
 
 class TestBankReconciliationStatement(DontManageTestCase):
 	def setUp(self):
 		for dt in [
-			"Loan Repayment",
-			"Loan Disbursement",
 			"Journal Entry",
 			"Journal Entry Account",
 			"Payment Entry",
 		]:
 			dontmanage.db.delete(dt)
+		clear_loan_transactions()
 
+	@if_lending_app_installed
 	def test_loan_entries_in_bank_reco_statement(self):
+		from lending.loan_management.doctype.loan.test_loan import create_loan_accounts
+
+		from dontmanageerp.accounts.doctype.bank_transaction.test_bank_transaction import (
+			create_loan_and_repayment,
+		)
+
 		create_loan_accounts()
+
 		repayment_entry = create_loan_and_repayment()
 
 		filters = dontmanage._dict(
@@ -38,3 +42,12 @@ class TestBankReconciliationStatement(DontManageTestCase):
 		result = execute(filters)
 
 		self.assertEqual(result[1][0].payment_entry, repayment_entry.name)
+
+
+@if_lending_app_installed
+def clear_loan_transactions():
+	for dt in [
+		"Loan Disbursement",
+		"Loan Repayment",
+	]:
+		dontmanage.db.delete(dt)

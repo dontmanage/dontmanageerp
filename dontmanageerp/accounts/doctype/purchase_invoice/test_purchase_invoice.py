@@ -5,7 +5,7 @@
 import unittest
 
 import dontmanage
-from dontmanage.tests.utils import change_settings
+from dontmanage.tests.utils import DontManageTestCase, change_settings
 from dontmanage.utils import add_days, cint, flt, getdate, nowdate, today
 
 import dontmanageerp
@@ -26,6 +26,11 @@ from dontmanageerp.stock.doctype.purchase_receipt.test_purchase_receipt import (
 	get_taxes,
 	make_purchase_receipt,
 )
+from dontmanageerp.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle import (
+	get_batch_from_bundle,
+	get_serial_nos_from_bundle,
+	make_serial_batch_bundle,
+)
 from dontmanageerp.stock.doctype.stock_entry.test_stock_entry import get_qty_after_transaction
 from dontmanageerp.stock.tests.test_utils import StockTestMixin
 
@@ -33,15 +38,18 @@ test_dependencies = ["Item", "Cost Center", "Payment Term", "Payment Terms Templ
 test_ignore = ["Serial No"]
 
 
-class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
+class TestPurchaseInvoice(DontManageTestCase, StockTestMixin):
 	@classmethod
 	def setUpClass(self):
 		unlink_payment_on_cancel_of_invoice()
-		dontmanage.db.set_value("Buying Settings", None, "allow_multiple_items", 1)
+		dontmanage.db.set_single_value("Buying Settings", "allow_multiple_items", 1)
 
 	@classmethod
 	def tearDownClass(self):
 		unlink_payment_on_cancel_of_invoice(0)
+
+	def tearDown(self):
+		dontmanage.db.rollback()
 
 	def test_purchase_invoice_received_qty(self):
 		"""
@@ -417,6 +425,7 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 			self.assertEqual(tax.tax_amount, expected_values[i][1])
 			self.assertEqual(tax.total, expected_values[i][2])
 
+	@change_settings("Accounts Settings", {"unlink_payment_on_cancellation_of_invoice": 1})
 	def test_purchase_invoice_with_advance(self):
 		from dontmanageerp.accounts.doctype.journal_entry.test_journal_entry import (
 			test_records as jv_test_records,
@@ -471,6 +480,7 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 			)
 		)
 
+	@change_settings("Accounts Settings", {"unlink_payment_on_cancellation_of_invoice": 1})
 	def test_invoice_with_advance_and_multi_payment_terms(self):
 		from dontmanageerp.accounts.doctype.journal_entry.test_journal_entry import (
 			test_records as jv_test_records,
@@ -635,13 +645,6 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 			return_pi,
 			[{"credit": 1200, "debit": 0}],
 			gle_filters={"account": "Stock In Hand - TCP1"},
-		)
-
-		# assert loss booked in COGS
-		self.assertGLEs(
-			return_pi,
-			[{"credit": 0, "debit": 200}],
-			gle_filters={"account": "Cost of Goods Sold - TCP1"},
 		)
 
 	def test_return_with_lcv(self):
@@ -888,14 +891,20 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 			rejected_warehouse="_Test Rejected Warehouse - _TC",
 			allow_zero_valuation_rate=1,
 		)
+		pi.load_from_db()
+
+		serial_no = get_serial_nos_from_bundle(pi.get("items")[0].serial_and_batch_bundle)[0]
+		rejected_serial_no = get_serial_nos_from_bundle(
+			pi.get("items")[0].rejected_serial_and_batch_bundle
+		)[0]
 
 		self.assertEqual(
-			dontmanage.db.get_value("Serial No", pi.get("items")[0].serial_no, "warehouse"),
+			dontmanage.db.get_value("Serial No", serial_no, "warehouse"),
 			pi.get("items")[0].warehouse,
 		)
 
 		self.assertEqual(
-			dontmanage.db.get_value("Serial No", pi.get("items")[0].rejected_serial_no, "warehouse"),
+			dontmanage.db.get_value("Serial No", rejected_serial_no, "warehouse"),
 			pi.get("items")[0].rejected_warehouse,
 		)
 
@@ -1160,7 +1169,7 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 
 		item = create_item("_Test Item for Deferred Accounting", is_purchase_item=True)
 		item.enable_deferred_expense = 1
-		item.deferred_expense_account = deferred_account
+		item.item_defaults[0].deferred_expense_account = deferred_account
 		item.save()
 
 		pi = make_purchase_invoice(item=item.name, qty=1, rate=100, do_not_save=True)
@@ -1216,14 +1225,13 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 		acc_settings.submit_journal_entriessubmit_journal_entries = 0
 		acc_settings.save()
 
+	@change_settings("Accounts Settings", {"unlink_payment_on_cancellation_of_invoice": 1})
 	def test_gain_loss_with_advance_entry(self):
-		unlink_enabled = dontmanage.db.get_value(
-			"Accounts Settings", "Accounts Settings", "unlink_payment_on_cancel_of_invoice"
+		unlink_enabled = dontmanage.db.get_single_value(
+			"Accounts Settings", "unlink_payment_on_cancellation_of_invoice"
 		)
 
-		dontmanage.db.set_value(
-			"Accounts Settings", "Accounts Settings", "unlink_payment_on_cancel_of_invoice", 1
-		)
+		dontmanage.db.set_single_value("Accounts Settings", "unlink_payment_on_cancellation_of_invoice", 1)
 
 		original_account = dontmanage.db.get_value("Company", "_Test Company", "exchange_gain_loss_account")
 		dontmanage.db.set_value(
@@ -1271,10 +1279,11 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 		pi.save()
 		pi.submit()
 
+		creditors_account = pi.credit_to
+
 		expected_gle = [
 			["_Test Account Cost for Goods Sold - _TC", 37500.0],
-			["_Test Payable USD - _TC", -35000.0],
-			["Exchange Gain/Loss - _TC", -2500.0],
+			["_Test Payable USD - _TC", -37500.0],
 		]
 
 		gl_entries = dontmanage.db.sql(
@@ -1290,6 +1299,31 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 		for i, gle in enumerate(gl_entries):
 			self.assertEqual(expected_gle[i][0], gle.account)
 			self.assertEqual(expected_gle[i][1], gle.balance)
+
+		pi.reload()
+		self.assertEqual(pi.outstanding_amount, 0)
+
+		total_debit_amount = dontmanage.db.get_all(
+			"Journal Entry Account",
+			{"account": creditors_account, "docstatus": 1, "reference_name": pi.name},
+			"sum(debit) as amount",
+			group_by="reference_name",
+		)[0].amount
+		self.assertEqual(flt(total_debit_amount, 2), 2500)
+		jea_parent = dontmanage.db.get_all(
+			"Journal Entry Account",
+			filters={
+				"account": creditors_account,
+				"docstatus": 1,
+				"reference_name": pi.name,
+				"debit": 2500,
+				"debit_in_account_currency": 0,
+			},
+			fields=["parent"],
+		)[0]
+		self.assertEqual(
+			dontmanage.db.get_value("Journal Entry", jea_parent.parent, "voucher_type"), "Exchange Gain Or Loss"
+		)
 
 		pi_2 = make_purchase_invoice(
 			supplier="_Test Supplier USD",
@@ -1315,10 +1349,12 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 		pi_2.save()
 		pi_2.submit()
 
+		pi_2.reload()
+		self.assertEqual(pi_2.outstanding_amount, 0)
+
 		expected_gle = [
 			["_Test Account Cost for Goods Sold - _TC", 36500.0],
-			["_Test Payable USD - _TC", -35000.0],
-			["Exchange Gain/Loss - _TC", -1500.0],
+			["_Test Payable USD - _TC", -36500.0],
 		]
 
 		gl_entries = dontmanage.db.sql(
@@ -1349,20 +1385,48 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 			self.assertEqual(expected_gle[i][0], gle.account)
 			self.assertEqual(expected_gle[i][1], gle.balance)
 
+		total_debit_amount = dontmanage.db.get_all(
+			"Journal Entry Account",
+			{"account": creditors_account, "docstatus": 1, "reference_name": pi_2.name},
+			"sum(debit) as amount",
+			group_by="reference_name",
+		)[0].amount
+		self.assertEqual(flt(total_debit_amount, 2), 1500)
+		jea_parent_2 = dontmanage.db.get_all(
+			"Journal Entry Account",
+			filters={
+				"account": creditors_account,
+				"docstatus": 1,
+				"reference_name": pi_2.name,
+				"debit": 1500,
+				"debit_in_account_currency": 0,
+			},
+			fields=["parent"],
+		)[0]
+		self.assertEqual(
+			dontmanage.db.get_value("Journal Entry", jea_parent_2.parent, "voucher_type"),
+			"Exchange Gain Or Loss",
+		)
+
 		pi.reload()
 		pi.cancel()
+
+		self.assertEqual(dontmanage.db.get_value("Journal Entry", jea_parent.parent, "docstatus"), 2)
 
 		pi_2.reload()
 		pi_2.cancel()
 
+		self.assertEqual(dontmanage.db.get_value("Journal Entry", jea_parent_2.parent, "docstatus"), 2)
+
 		pay.reload()
 		pay.cancel()
 
-		dontmanage.db.set_value(
-			"Accounts Settings", "Accounts Settings", "unlink_payment_on_cancel_of_invoice", unlink_enabled
+		dontmanage.db.set_single_value(
+			"Accounts Settings", "unlink_payment_on_cancellation_of_invoice", unlink_enabled
 		)
 		dontmanage.db.set_value("Company", "_Test Company", "exchange_gain_loss_account", original_account)
 
+	@change_settings("Accounts Settings", {"unlink_payment_on_cancellation_of_invoice": 1})
 	def test_purchase_invoice_advance_taxes(self):
 		from dontmanageerp.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 
@@ -1652,7 +1716,7 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 		)
 
 		pi.load_from_db()
-		batch_no = pi.items[0].batch_no
+		batch_no = get_batch_from_bundle(pi.items[0].serial_and_batch_bundle)
 		self.assertTrue(batch_no)
 
 		dontmanage.db.set_value("Batch", batch_no, "expiry_date", add_days(nowdate(), -1))
@@ -1662,22 +1726,350 @@ class TestPurchaseInvoice(unittest.TestCase, StockTestMixin):
 
 		self.assertTrue(return_pi.docstatus == 1)
 
+	def test_advance_entries_as_asset(self):
+		from dontmanageerp.accounts.doctype.payment_entry.test_payment_entry import create_payment_entry
 
-def check_gl_entries(doc, voucher_no, expected_gle, posting_date):
-	gl_entries = dontmanage.db.sql(
-		"""select account, debit, credit, posting_date
-		from `tabGL Entry`
-		where voucher_type='Purchase Invoice' and voucher_no=%s and posting_date >= %s
-		order by posting_date asc, account asc""",
-		(voucher_no, posting_date),
-		as_dict=1,
+		account = create_account(
+			parent_account="Current Assets - _TC",
+			account_name="Advances Paid",
+			company="_Test Company",
+			account_type="Receivable",
+		)
+
+		set_advance_flag(company="_Test Company", flag=1, default_account=account)
+
+		pe = create_payment_entry(
+			company="_Test Company",
+			payment_type="Pay",
+			party_type="Supplier",
+			party="_Test Supplier",
+			paid_from="Cash - _TC",
+			paid_to="Creditors - _TC",
+			paid_amount=500,
+		)
+		pe.save()  # save trigger is needed for set_liability_account() to be executed
+		pe.submit()
+
+		pi = make_purchase_invoice(
+			company="_Test Company",
+			do_not_save=True,
+			do_not_submit=True,
+			rate=1000,
+			price_list_rate=1000,
+			qty=1,
+		)
+		pi.base_grand_total = 1000
+		pi.grand_total = 1000
+		pi.set_advances()
+		for advance in pi.advances:
+			advance.allocated_amount = 500 if advance.reference_name == pe.name else 0
+		pi.save()
+		pi.submit()
+
+		self.assertEqual(pi.advances[0].allocated_amount, 500)
+
+		# Check GL Entry against payment doctype
+		expected_gle = [
+			["Advances Paid - _TC", 500.0, 0.0, nowdate()],
+			["Advances Paid - _TC", 0.0, 500.0, nowdate()],
+			["Cash - _TC", 0.0, 500, nowdate()],
+			["Creditors - _TC", 500, 0.0, nowdate()],
+		]
+
+		check_gl_entries(self, pe.name, expected_gle, nowdate(), voucher_type="Payment Entry")
+
+		pi.load_from_db()
+		self.assertEqual(pi.outstanding_amount, 500)
+
+		set_advance_flag(company="_Test Company", flag=0, default_account="")
+
+	def test_gl_entries_for_standalone_debit_note(self):
+		from dontmanageerp.stock.doctype.item.test_item import make_item
+
+		item_code = make_item(properties={"is_stock_item": 1})
+		make_purchase_invoice(item_code=item_code, qty=5, rate=500, update_stock=True)
+
+		returned_inv = make_purchase_invoice(
+			item_code=item_code, qty=-5, rate=5, update_stock=True, is_return=True
+		)
+
+		# override the rate with valuation rate
+		sle = dontmanage.get_all(
+			"Stock Ledger Entry",
+			fields=["stock_value_difference", "actual_qty"],
+			filters={"voucher_no": returned_inv.name},
+		)[0]
+
+		rate = flt(sle.stock_value_difference) / flt(sle.actual_qty)
+		self.assertAlmostEqual(rate, 500)
+
+	def test_payment_allocation_for_payment_terms(self):
+		from dontmanageerp.buying.doctype.purchase_order.test_purchase_order import (
+			create_pr_against_po,
+			create_purchase_order,
+		)
+		from dontmanageerp.selling.doctype.sales_order.test_sales_order import (
+			automatically_fetch_payment_terms,
+		)
+		from dontmanageerp.stock.doctype.purchase_receipt.purchase_receipt import (
+			make_purchase_invoice as make_pi_from_pr,
+		)
+
+		automatically_fetch_payment_terms()
+		dontmanage.db.set_value(
+			"Payment Terms Template",
+			"_Test Payment Term Template",
+			"allocate_payment_based_on_payment_terms",
+			0,
+		)
+
+		po = create_purchase_order(do_not_save=1)
+		po.payment_terms_template = "_Test Payment Term Template"
+		po.save()
+		po.submit()
+
+		pr = create_pr_against_po(po.name, received_qty=4)
+		pi = make_pi_from_pr(pr.name)
+		self.assertEqual(pi.payment_schedule[0].payment_amount, 1000)
+
+		dontmanage.db.set_value(
+			"Payment Terms Template",
+			"_Test Payment Term Template",
+			"allocate_payment_based_on_payment_terms",
+			1,
+		)
+		pi = make_pi_from_pr(pr.name)
+		self.assertEqual(pi.payment_schedule[0].payment_amount, 2500)
+
+		automatically_fetch_payment_terms(enable=0)
+		dontmanage.db.set_value(
+			"Payment Terms Template",
+			"_Test Payment Term Template",
+			"allocate_payment_based_on_payment_terms",
+			0,
+		)
+
+	def test_offsetting_entries_for_accounting_dimensions(self):
+		from dontmanageerp.accounts.doctype.account.test_account import create_account
+		from dontmanageerp.accounts.report.trial_balance.test_trial_balance import (
+			clear_dimension_defaults,
+			create_accounting_dimension,
+			disable_dimension,
+		)
+
+		create_account(
+			account_name="Offsetting",
+			company="_Test Company",
+			parent_account="Temporary Accounts - _TC",
+		)
+
+		create_accounting_dimension(company="_Test Company", offsetting_account="Offsetting - _TC")
+
+		branch1 = dontmanage.new_doc("Branch")
+		branch1.branch = "Location 1"
+		branch1.insert(ignore_if_duplicate=True)
+		branch2 = dontmanage.new_doc("Branch")
+		branch2.branch = "Location 2"
+		branch2.insert(ignore_if_duplicate=True)
+
+		pi = make_purchase_invoice(
+			company="_Test Company",
+			do_not_save=True,
+			do_not_submit=True,
+			rate=1000,
+			price_list_rate=1000,
+			qty=1,
+		)
+		pi.branch = branch1.branch
+		pi.items[0].branch = branch2.branch
+		pi.save()
+		pi.submit()
+
+		expected_gle = [
+			["_Test Account Cost for Goods Sold - _TC", 1000, 0.0, nowdate(), branch2.branch],
+			["Creditors - _TC", 0.0, 1000, nowdate(), branch1.branch],
+			["Offsetting - _TC", 1000, 0.0, nowdate(), branch1.branch],
+			["Offsetting - _TC", 0.0, 1000, nowdate(), branch2.branch],
+		]
+
+		check_gl_entries(
+			self,
+			pi.name,
+			expected_gle,
+			nowdate(),
+			voucher_type="Purchase Invoice",
+			additional_columns=["branch"],
+		)
+		clear_dimension_defaults("Branch")
+		disable_dimension()
+
+	def test_repost_accounting_entries(self):
+		# update repost settings
+		settings = dontmanage.get_doc("Repost Accounting Ledger Settings")
+		if not [x for x in settings.allowed_types if x.document_type == "Purchase Invoice"]:
+			settings.append("allowed_types", {"document_type": "Purchase Invoice", "allowed": True})
+		settings.save()
+
+		pi = make_purchase_invoice(
+			rate=1000,
+			price_list_rate=1000,
+			qty=1,
+		)
+		expected_gle = [
+			["_Test Account Cost for Goods Sold - _TC", 1000, 0.0, nowdate()],
+			["Creditors - _TC", 0.0, 1000, nowdate()],
+		]
+		check_gl_entries(self, pi.name, expected_gle, nowdate())
+
+		pi.items[0].expense_account = "Service - _TC"
+		pi.save()
+		pi.load_from_db()
+		self.assertTrue(pi.repost_required)
+		pi.repost_accounting_entries()
+
+		expected_gle = [
+			["Creditors - _TC", 0.0, 1000, nowdate()],
+			["Service - _TC", 1000, 0.0, nowdate()],
+		]
+		check_gl_entries(self, pi.name, expected_gle, nowdate())
+		pi.load_from_db()
+		self.assertFalse(pi.repost_required)
+
+	@change_settings("Buying Settings", {"supplier_group": None})
+	def test_purchase_invoice_without_supplier_group(self):
+		# Create a Supplier
+		test_supplier_name = "_Test Supplier Without Supplier Group"
+		if not dontmanage.db.exists("Supplier", test_supplier_name):
+			supplier = dontmanage.get_doc(
+				{
+					"doctype": "Supplier",
+					"supplier_name": test_supplier_name,
+				}
+			).insert(ignore_permissions=True)
+
+			self.assertEqual(supplier.supplier_group, None)
+
+		po = create_purchase_order(
+			supplier=test_supplier_name,
+			rate=3000,
+			item="_Test Non Stock Item",
+			posting_date="2021-09-15",
+		)
+
+		pi = make_purchase_invoice(supplier=test_supplier_name)
+
+		self.assertEqual(po.docstatus, 1)
+		self.assertEqual(pi.docstatus, 1)
+
+	def test_default_cost_center_for_purchase(self):
+		from dontmanageerp.accounts.doctype.cost_center.test_cost_center import create_cost_center
+
+		for c_center in ["_Test Cost Center Selling", "_Test Cost Center Buying"]:
+			create_cost_center(cost_center_name=c_center)
+
+		item = create_item(
+			"_Test Cost Center Item For Purchase",
+			is_stock_item=1,
+			buying_cost_center="_Test Cost Center Buying - _TC",
+			selling_cost_center="_Test Cost Center Selling - _TC",
+		)
+
+		pi = make_purchase_invoice(
+			item=item.name, qty=1, rate=1000, update_stock=True, do_not_submit=True, cost_center=""
+		)
+
+		pi.items[0].cost_center = ""
+		pi.set_missing_values()
+		pi.calculate_taxes_and_totals()
+		pi.save()
+
+		self.assertEqual(pi.items[0].cost_center, "_Test Cost Center Buying - _TC")
+
+	def test_debit_note_with_account_mismatch(self):
+		new_creditors = create_account(
+			parent_account="Accounts Payable - _TC",
+			account_name="Creditors 2",
+			company="_Test Company",
+			account_type="Payable",
+		)
+		pi = make_purchase_invoice(qty=1, rate=1000)
+		dr_note = make_purchase_invoice(
+			qty=-1, rate=1000, is_return=1, return_against=pi.name, do_not_save=True
+		)
+		dr_note.credit_to = new_creditors
+
+		self.assertRaises(dontmanage.ValidationError, dr_note.save)
+
+	def test_debit_note_without_item(self):
+		pi = make_purchase_invoice(item_name="_Test Item", qty=10, do_not_submit=True)
+		pi.items[0].item_code = ""
+		pi.save()
+
+		self.assertFalse(pi.items[0].item_code)
+		pi.submit()
+
+		return_pi = make_purchase_invoice(
+			item_name="_Test Item",
+			is_return=1,
+			return_against=pi.name,
+			qty=-10,
+			do_not_save=True,
+		)
+		return_pi.items[0].item_code = ""
+		return_pi.save()
+		return_pi.submit()
+		self.assertEqual(return_pi.docstatus, 1)
+
+
+def set_advance_flag(company, flag, default_account):
+	dontmanage.db.set_value(
+		"Company",
+		company,
+		{
+			"book_advance_payments_in_separate_party_account": flag,
+			"default_advance_paid_account": default_account,
+		},
 	)
+
+
+def check_gl_entries(
+	doc,
+	voucher_no,
+	expected_gle,
+	posting_date,
+	voucher_type="Purchase Invoice",
+	additional_columns=None,
+):
+	gl = dontmanage.qb.DocType("GL Entry")
+	query = (
+		dontmanage.qb.from_(gl)
+		.select(gl.account, gl.debit, gl.credit, gl.posting_date)
+		.where(
+			(gl.voucher_type == voucher_type)
+			& (gl.voucher_no == voucher_no)
+			& (gl.posting_date >= posting_date)
+			& (gl.is_cancelled == 0)
+		)
+		.orderby(gl.posting_date, gl.account, gl.creation)
+	)
+
+	if additional_columns:
+		for col in additional_columns:
+			query = query.select(gl[col])
+
+	gl_entries = query.run(as_dict=True)
 
 	for i, gle in enumerate(gl_entries):
 		doc.assertEqual(expected_gle[i][0], gle.account)
 		doc.assertEqual(expected_gle[i][1], gle.debit)
 		doc.assertEqual(expected_gle[i][2], gle.credit)
 		doc.assertEqual(getdate(expected_gle[i][3]), gle.posting_date)
+
+		if additional_columns:
+			j = 4
+			for col in additional_columns:
+				doc.assertEqual(expected_gle[i][j], gle[col])
+				j += 1
 
 
 def create_tax_witholding_category(category_name, company, account):
@@ -1734,10 +2126,37 @@ def make_purchase_invoice(**args):
 	pi.supplier_warehouse = args.supplier_warehouse or "_Test Warehouse 1 - _TC"
 	pi.cost_center = args.parent_cost_center
 
+	bundle_id = None
+	if args.get("batch_no") or args.get("serial_no"):
+		batches = {}
+		qty = args.qty or 5
+		item_code = args.item or args.item_code or "_Test Item"
+		if args.get("batch_no"):
+			batches = dontmanage._dict({args.batch_no: qty})
+
+		serial_nos = args.get("serial_no") or []
+
+		bundle_id = make_serial_batch_bundle(
+			dontmanage._dict(
+				{
+					"item_code": item_code,
+					"warehouse": args.warehouse or "_Test Warehouse - _TC",
+					"qty": qty,
+					"batches": batches,
+					"voucher_type": "Purchase Invoice",
+					"serial_nos": serial_nos,
+					"type_of_transaction": "Inward",
+					"posting_date": args.posting_date or today(),
+					"posting_time": args.posting_time,
+				}
+			)
+		).name
+
 	pi.append(
 		"items",
 		{
 			"item_code": args.item or args.item_code or "_Test Item",
+			"item_name": args.item_name,
 			"warehouse": args.warehouse or "_Test Warehouse - _TC",
 			"qty": args.qty or 5,
 			"received_qty": args.received_qty or 0,
@@ -1748,12 +2167,11 @@ def make_purchase_invoice(**args):
 			"discount_account": args.discount_account or None,
 			"discount_amount": args.discount_amount or 0,
 			"conversion_factor": 1.0,
-			"serial_no": args.serial_no,
+			"serial_and_batch_bundle": bundle_id,
 			"stock_uom": args.uom or "_Test UOM",
 			"cost_center": args.cost_center or "_Test Cost Center - _TC",
 			"project": args.project,
 			"rejected_warehouse": args.rejected_warehouse or "",
-			"rejected_serial_no": args.rejected_serial_no or "",
 			"asset_location": args.location or "",
 			"allow_zero_valuation_rate": args.get("allow_zero_valuation_rate") or 0,
 		},
@@ -1797,6 +2215,31 @@ def make_purchase_invoice_against_cost_center(**args):
 	if args.supplier_warehouse:
 		pi.supplier_warehouse = "_Test Warehouse 1 - _TC"
 
+	bundle_id = None
+	if args.get("batch_no") or args.get("serial_no"):
+		batches = {}
+		qty = args.qty or 5
+		item_code = args.item or args.item_code or "_Test Item"
+		if args.get("batch_no"):
+			batches = dontmanage._dict({args.batch_no: qty})
+
+		serial_nos = args.get("serial_no") or []
+
+		bundle_id = make_serial_batch_bundle(
+			dontmanage._dict(
+				{
+					"item_code": item_code,
+					"warehouse": args.warehouse or "_Test Warehouse - _TC",
+					"qty": qty,
+					"batches": batches,
+					"voucher_type": "Purchase Receipt",
+					"serial_nos": serial_nos,
+					"posting_date": args.posting_date or today(),
+					"posting_time": args.posting_time,
+				}
+			)
+		).name
+
 	pi.append(
 		"items",
 		{
@@ -1807,12 +2250,11 @@ def make_purchase_invoice_against_cost_center(**args):
 			"rejected_qty": args.rejected_qty or 0,
 			"rate": args.rate or 50,
 			"conversion_factor": 1.0,
-			"serial_no": args.serial_no,
+			"serial_and_batch_bundle": bundle_id,
 			"stock_uom": "_Test UOM",
 			"cost_center": args.cost_center or "_Test Cost Center - _TC",
 			"project": args.project,
 			"rejected_warehouse": args.rejected_warehouse or "",
-			"rejected_serial_no": args.rejected_serial_no or "",
 		},
 	)
 	if not args.do_not_save:

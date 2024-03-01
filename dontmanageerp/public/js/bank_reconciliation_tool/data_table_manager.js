@@ -40,8 +40,8 @@ dontmanageerp.accounts.bank_reconciliation.DataTableManager = class DataTableMan
 				name: __("Date"),
 				editable: false,
 				width: 100,
+				format: dontmanage.form.formatters.Date,
 			},
-
 			{
 				name: __("Party Type"),
 				editable: false,
@@ -117,17 +117,13 @@ dontmanageerp.accounts.bank_reconciliation.DataTableManager = class DataTableMan
 		return [
 			row["date"],
 			row["party_type"],
-			row["party"],
+			dontmanage.form.formatters.Link(row["party"], {options: row["party_type"]}),
 			row["description"],
 			row["deposit"],
 			row["withdrawal"],
 			row["unallocated_amount"],
 			row["reference_number"],
-			`
-			<Button class="btn btn-primary btn-xs center"  data-name = ${row["name"]} >
-				${__("Actions")}
-			</a>
-			`,
+			`<button class="btn btn-primary btn-xs center" data-name="${row["name"]}">${__("Actions")}</button>`
 		];
 	}
 

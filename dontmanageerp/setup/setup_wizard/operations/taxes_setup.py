@@ -2,8 +2,8 @@
 # License: GNU General Public License v3. See license.txt
 
 
-import os
 import json
+import os
 
 import dontmanage
 from dontmanage import _
@@ -114,10 +114,11 @@ def update_regional_tax_settings(country, company):
 				dontmanage.scrub(country)
 			)
 			dontmanage.get_attr(module_name)(country, company)
-		except Exception as e:
+		except (ImportError, AttributeError):
+			pass
+		except Exception:
 			# Log error and ignore if failed to setup regional tax settings
 			dontmanage.log_error("Unable to setup regional tax settings")
-			pass
 
 
 def make_taxes_and_charges_template(company_name, doctype, template):

@@ -1,40 +1,40 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
 
-{% include 'dontmanageerp/selling/sales_common.js' %};
 dontmanage.provide("dontmanageerp.accounts");
 
-
+dontmanageerp.accounts.taxes.setup_tax_validations("Sales Invoice");
+dontmanageerp.accounts.payment_triggers.setup("Sales Invoice");
+dontmanageerp.accounts.pos.setup("Sales Invoice");
+dontmanageerp.accounts.taxes.setup_tax_filters("Sales Taxes and Charges");
+dontmanageerp.sales_common.setup_selling_controller();
 dontmanageerp.accounts.SalesInvoiceController = class SalesInvoiceController extends dontmanageerp.selling.SellingController {
 	setup(doc) {
 		this.setup_posting_date_time_check();
 		super.setup(doc);
 	}
 	company() {
+		super.company();
 		dontmanageerp.accounts.dimensions.update_dimension(this.frm, this.frm.doctype);
-
-		let me = this;
-		if (this.frm.doc.company) {
-			dontmanage.call({
-				method:
-					"dontmanageerp.accounts.party.get_party_account",
-				args: {
-					party_type: 'Customer',
-					party: this.frm.doc.customer,
-					company: this.frm.doc.company
-				},
-				callback: (response) => {
-					if (response) me.frm.set_value("debit_to", response.message);
-				},
-			});
-		}
 	}
 	onload() {
 		var me = this;
 		super.onload();
 
-		this.frm.ignore_doctypes_on_cancel_all = ['POS Invoice', 'Timesheet', 'POS Invoice Merge Log',
-							  'POS Closing Entry', 'Journal Entry', 'Payment Entry', "Repost Payment Ledger"];
+		this.frm.ignore_doctypes_on_cancel_all = [
+			"POS Invoice",
+			"Timesheet",
+			"POS Invoice Merge Log",
+			"POS Closing Entry",
+			"Journal Entry",
+			"Payment Entry",
+			"Repost Payment Ledger",
+			"Repost Accounting Ledger",
+			"Unreconcile Payment",
+			"Unreconcile Payment Entries",
+			"Serial and Batch Bundle",
+			"Bank Transaction",
+		];
 
 		if(!this.frm.doc.__islocal && !this.frm.doc.customer && this.frm.doc.debit_to) {
 			// show debit_to in print format
@@ -88,14 +88,20 @@ dontmanageerp.accounts.SalesInvoiceController = class SalesInvoiceController ext
 		}
 
 		this.show_general_ledger();
+		dontmanageerp.accounts.ledger_preview.show_accounting_ledger_preview(this.frm);
 
-		if(doc.update_stock) this.show_stock_ledger();
+		if(doc.update_stock){
+			this.show_stock_ledger();
+			dontmanageerp.accounts.ledger_preview.show_stock_ledger_preview(this.frm);
+		}
 
-		if (doc.docstatus == 1 && doc.outstanding_amount!=0
-			&& !(cint(doc.is_return) && doc.return_against)) {
-			cur_frm.add_custom_button(__('Payment'),
-				this.make_payment_entry, __('Create'));
-			cur_frm.page.set_inner_btn_group_as_primary(__('Create'));
+		if (doc.docstatus == 1 && doc.outstanding_amount!=0) {
+			this.frm.add_custom_button(
+				__('Payment'),
+				() => this.make_payment_entry(),
+				__('Create')
+			);
+			this.frm.page.set_inner_btn_group_as_primary(__('Create'));
 		}
 
 		if(doc.docstatus==1 && !doc.is_return) {
@@ -135,9 +141,15 @@ dontmanageerp.accounts.SalesInvoiceController = class SalesInvoiceController ext
 					cur_frm.events.create_invoice_discounting(cur_frm);
 				}, __('Create'));
 
-				if (doc.due_date < dontmanage.datetime.get_today()) {
-					cur_frm.add_custom_button(__('Dunning'), function() {
-						cur_frm.events.create_dunning(cur_frm);
+				const payment_is_overdue = doc.payment_schedule.map(
+					row => Date.parse(row.due_date) < Date.now()
+				).reduce(
+					(prev, current) => prev || current
+				);
+
+				if (payment_is_overdue) {
+					this.frm.add_custom_button(__('Dunning'), () => {
+						this.frm.events.create_dunning(this.frm);
 					}, __('Create'));
 				}
 			}
@@ -146,12 +158,6 @@ dontmanageerp.accounts.SalesInvoiceController = class SalesInvoiceController ext
 				cur_frm.add_custom_button(__('Maintenance Schedule'), function () {
 					cur_frm.cscript.make_maintenance_schedule();
 				}, __('Create'));
-			}
-
-			if(!doc.auto_repeat) {
-				cur_frm.add_custom_button(__('Subscription'), function() {
-					dontmanageerp.utils.make_subscription(doc.doctype, doc.name)
-				}, __('Create'))
 			}
 		}
 
@@ -174,6 +180,8 @@ dontmanageerp.accounts.SalesInvoiceController = class SalesInvoiceController ext
 				}, __('Create'));
 			}
 		}
+
+		dontmanageerp.accounts.unreconcile_payment.add_unreconcile_btn(me.frm);
 	}
 
 	make_maintenance_schedule() {
@@ -186,6 +194,7 @@ dontmanageerp.accounts.SalesInvoiceController = class SalesInvoiceController ext
 	on_submit(doc, dt, dn) {
 		var me = this;
 
+		super.on_submit();
 		if (dontmanage.get_route()[0] != 'Form') {
 			return
 		}
@@ -331,6 +340,7 @@ dontmanageerp.accounts.SalesInvoiceController = class SalesInvoiceController ext
 	}
 
 	make_inter_company_invoice() {
+		let me = this;
 		dontmanage.model.open_mapped_doc({
 			method: "dontmanageerp.accounts.doctype.sales_invoice.sales_invoice.make_inter_company_purchase_invoice",
 			frm: me.frm
@@ -550,15 +560,6 @@ cur_frm.fields_dict.write_off_cost_center.get_query = function(doc) {
 	}
 }
 
-// Income Account in Details Table
-// --------------------------------
-cur_frm.set_query("income_account", "items", function(doc) {
-	return{
-		query: "dontmanageerp.controllers.queries.get_income_account",
-		filters: {'company': doc.company}
-	}
-});
-
 // Cost Center in Details Table
 // -----------------------------
 cur_frm.fields_dict["items"].grid.get_field("cost_center").get_query = function(doc) {
@@ -653,6 +654,16 @@ dontmanage.ui.form.on('Sales Invoice', {
 			};
 		});
 
+		frm.set_query("income_account", "items", function() {
+			return{
+				query: "dontmanageerp.controllers.queries.get_income_account",
+				filters: {
+					'company': frm.doc.company,
+					"disabled": 0
+				}
+			}
+		});
+
 		frm.custom_make_buttons = {
 			'Delivery Note': 'Delivery',
 			'Sales Invoice': 'Return / Credit Note',
@@ -663,19 +674,6 @@ dontmanage.ui.form.on('Sales Invoice', {
 			return{
 				query: "dontmanageerp.projects.doctype.timesheet.timesheet.get_timesheet",
 				filters: {'project': doc.project}
-			}
-		}
-
-		// expense account
-		frm.fields_dict['items'].grid.get_field('expense_account').get_query = function(doc) {
-			if (dontmanageerp.is_perpetual_inventory_enabled(doc.company)) {
-				return {
-					filters: {
-						'report_type': 'Profit and Loss',
-						'company': doc.company,
-						"is_group": 0
-					}
-				}
 			}
 		}
 
@@ -716,7 +714,7 @@ dontmanage.ui.form.on('Sales Invoice', {
 
 		frm.set_query('pos_profile', function(doc) {
 			if(!doc.company) {
-				dontmanage.throw(_('Please set Company'));
+				dontmanage.throw(__('Please set Company'));
 			}
 
 			return {
@@ -772,7 +770,6 @@ dontmanage.ui.form.on('Sales Invoice', {
 
 	update_stock: function(frm, dt, dn) {
 		frm.events.hide_fields(frm);
-		frm.fields_dict.items.grid.toggle_reqd("item_code", frm.doc.update_stock);
 		frm.trigger('reset_posting_time');
 	},
 
@@ -863,7 +860,7 @@ dontmanage.ui.form.on('Sales Invoice', {
 			kwargs = Object();
 		}
 
-		if (!kwargs.hasOwnProperty("project") && frm.doc.project) {
+		if (!Object.prototype.hasOwnProperty.call(kwargs, "project") && frm.doc.project) {
 			kwargs.project = frm.doc.project;
 		}
 
@@ -896,6 +893,8 @@ dontmanage.ui.form.on('Sales Invoice', {
 				frm.events.append_time_log(frm, timesheet, 1.0);
 			}
 		});
+		frm.trigger("calculate_timesheet_totals");
+		frm.refresh();
 	},
 
 	async get_exchange_rate(frm, from_currency, to_currency) {
@@ -935,9 +934,6 @@ dontmanage.ui.form.on('Sales Invoice', {
 		row.billing_amount = flt(time_log.billing_amount) * flt(exchange_rate);
 		row.timesheet_detail = time_log.name;
 		row.project_name = time_log.project_name;
-
-		frm.refresh_field("timesheets");
-		frm.trigger("calculate_timesheet_totals");
 	},
 
 	calculate_timesheet_totals: function(frm) {

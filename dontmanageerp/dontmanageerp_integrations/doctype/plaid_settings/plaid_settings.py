@@ -7,14 +7,29 @@ import dontmanage
 from dontmanage import _
 from dontmanage.desk.doctype.tag.tag import add_tag
 from dontmanage.model.document import Document
-from dontmanage.utils import add_months, formatdate, getdate, today
+from dontmanage.utils import add_months, formatdate, getdate, sbool, today
 from plaid.errors import ItemError
 
-from dontmanageerp.accounts.doctype.journal_entry.journal_entry import get_default_bank_cash_account
 from dontmanageerp.dontmanageerp_integrations.doctype.plaid_settings.plaid_connector import PlaidConnector
 
 
 class PlaidSettings(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		automatic_sync: DF.Check
+		enable_european_access: DF.Check
+		enabled: DF.Check
+		plaid_client_id: DF.Data | None
+		plaid_env: DF.Literal["sandbox", "development", "production"]
+		plaid_secret: DF.Password | None
+	# end: auto-generated types
+
 	@staticmethod
 	@dontmanage.whitelist()
 	def get_link_token():
@@ -74,9 +89,15 @@ def add_bank_accounts(response, bank, company):
 		bank = json.loads(bank)
 	result = []
 
-	default_gl_account = get_default_bank_cash_account(company, "Bank")
-	if not default_gl_account:
-		dontmanage.throw(_("Please setup a default bank account for company {0}").format(company))
+	parent_gl_account = dontmanage.db.get_all(
+		"Account", {"company": company, "account_type": "Bank", "is_group": 1, "disabled": 0}
+	)
+	if not parent_gl_account:
+		dontmanage.throw(
+			_(
+				"Please setup and enable a group account with the Account Type - {0} for the company {1}"
+			).format(dontmanage.bold("Bank"), company)
+		)
 
 	for account in response["accounts"]:
 		acc_type = dontmanage.db.get_value("Bank Account Type", account["type"])
@@ -92,11 +113,22 @@ def add_bank_accounts(response, bank, company):
 
 		if not existing_bank_account:
 			try:
+				gl_account = dontmanage.get_doc(
+					{
+						"doctype": "Account",
+						"account_name": account["name"] + " - " + response["institution"]["name"],
+						"parent_account": parent_gl_account[0].name,
+						"account_type": "Bank",
+						"company": company,
+					}
+				)
+				gl_account.insert(ignore_if_duplicate=True)
+
 				new_account = dontmanage.get_doc(
 					{
 						"doctype": "Bank Account",
 						"bank": bank["bank_name"],
-						"account": default_gl_account.account,
+						"account": gl_account.name,
 						"account_name": account["name"],
 						"account_type": account.get("type", ""),
 						"account_subtype": account.get("subtype", ""),
@@ -161,7 +193,6 @@ def add_account_subtype(account_subtype):
 		dontmanage.throw(dontmanage.get_traceback())
 
 
-@dontmanage.whitelist()
 def sync_transactions(bank, bank_account):
 	"""Sync transactions based on the last integration date as the start date, after sync is completed
 	add the transaction date of the oldest transaction as the last integration date."""
@@ -220,7 +251,7 @@ def get_transactions(bank, bank_account=None, start_date=None, end_date=None):
 		if e.code == "ITEM_LOGIN_REQUIRED":
 			msg = _("There was an error syncing transactions.") + " "
 			msg += _("Please refresh or reset the Plaid linking of the Bank {}.").format(bank) + " "
-			dontmanage.log_error(msg, title=_("Plaid Link Refresh Required"))
+			dontmanage.log_error(message=msg, title=_("Plaid Link Refresh Required"))
 
 	return transactions
 
@@ -238,22 +269,22 @@ def new_bank_transaction(transaction):
 		deposit = abs(amount)
 		withdrawal = 0.0
 
-	status = "Pending" if transaction["pending"] == "True" else "Settled"
-
 	tags = []
-	try:
-		tags += transaction["category"]
-		tags += [f'Plaid Cat. {transaction["category_id"]}']
-	except KeyError:
-		pass
+	if transaction["category"]:
+		try:
+			tags += transaction["category"]
+			tags += [f'Plaid Cat. {transaction["category_id"]}']
+		except KeyError:
+			pass
 
-	if not dontmanage.db.exists("Bank Transaction", dict(transaction_id=transaction["transaction_id"])):
+	if not dontmanage.db.exists(
+		"Bank Transaction", dict(transaction_id=transaction["transaction_id"])
+	) and not sbool(transaction["pending"]):
 		try:
 			new_transaction = dontmanage.get_doc(
 				{
 					"doctype": "Bank Transaction",
 					"date": getdate(transaction["date"]),
-					"status": status,
 					"bank_account": bank_account,
 					"deposit": deposit,
 					"withdrawal": withdrawal,

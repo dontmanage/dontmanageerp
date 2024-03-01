@@ -3,18 +3,6 @@
 
 if(!window.dontmanageerp) window.dontmanageerp = {};
 
-// Add / update a new Lead / Communication
-// subject, sender, description
-dontmanage.send_message = function(opts, btn) {
-	return dontmanage.call({
-		type: "POST",
-		method: "dontmanageerp.templates.utils.send_message",
-		btn: btn,
-		args: opts,
-		callback: opts.callback
-	});
-};
-
 dontmanageerp.subscribe_to_newsletter = function(opts, btn) {
 	return dontmanage.call({
 		type: "POST",
@@ -24,6 +12,3 @@ dontmanageerp.subscribe_to_newsletter = function(opts, btn) {
 		callback: opts.callback
 	});
 }
-
-// for backward compatibility
-dontmanageerp.send_message = dontmanage.send_message;

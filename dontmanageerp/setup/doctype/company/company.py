@@ -11,7 +11,8 @@ from dontmanage.cache_manager import clear_defaults_cache
 from dontmanage.contacts.address_and_contact import load_address_and_contact
 from dontmanage.custom.doctype.property_setter.property_setter import make_property_setter
 from dontmanage.desk.page.setup_wizard.setup_wizard import make_records
-from dontmanage.utils import cint, formatdate, get_timestamp, today
+from dontmanage.utils import cint, formatdate, get_link_to_form, get_timestamp, today
+from dontmanage.utils.background_jobs import get_job, is_job_enqueued
 from dontmanage.utils.nestedset import NestedSet, rebuild_tree
 
 from dontmanageerp.accounts.doctype.account.account import get_account_currency
@@ -19,6 +20,90 @@ from dontmanageerp.setup.setup_wizard.operations.taxes_setup import setup_taxes_
 
 
 class Company(NestedSet):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		abbr: DF.Data
+		accumulated_depreciation_account: DF.Link | None
+		allow_account_creation_against_child_company: DF.Check
+		asset_received_but_not_billed: DF.Link | None
+		auto_err_frequency: DF.Literal["Daily", "Weekly"]
+		auto_exchange_rate_revaluation: DF.Check
+		book_advance_payments_in_separate_party_account: DF.Check
+		capital_work_in_progress_account: DF.Link | None
+		chart_of_accounts: DF.Literal
+		company_description: DF.TextEditor | None
+		company_logo: DF.AttachImage | None
+		company_name: DF.Data
+		cost_center: DF.Link | None
+		country: DF.Link
+		create_chart_of_accounts_based_on: DF.Literal["", "Standard Template", "Existing Company"]
+		credit_limit: DF.Currency
+		date_of_commencement: DF.Date | None
+		date_of_establishment: DF.Date | None
+		date_of_incorporation: DF.Date | None
+		default_advance_paid_account: DF.Link | None
+		default_advance_received_account: DF.Link | None
+		default_bank_account: DF.Link | None
+		default_buying_terms: DF.Link | None
+		default_cash_account: DF.Link | None
+		default_currency: DF.Link
+		default_deferred_expense_account: DF.Link | None
+		default_deferred_revenue_account: DF.Link | None
+		default_discount_account: DF.Link | None
+		default_expense_account: DF.Link | None
+		default_finance_book: DF.Link | None
+		default_holiday_list: DF.Link | None
+		default_in_transit_warehouse: DF.Link | None
+		default_income_account: DF.Link | None
+		default_inventory_account: DF.Link | None
+		default_letter_head: DF.Link | None
+		default_payable_account: DF.Link | None
+		default_provisional_account: DF.Link | None
+		default_receivable_account: DF.Link | None
+		default_selling_terms: DF.Link | None
+		default_warehouse_for_sales_return: DF.Link | None
+		depreciation_cost_center: DF.Link | None
+		depreciation_expense_account: DF.Link | None
+		disposal_account: DF.Link | None
+		domain: DF.Data | None
+		email: DF.Data | None
+		enable_perpetual_inventory: DF.Check
+		enable_provisional_accounting_for_non_stock_items: DF.Check
+		exception_budget_approver_role: DF.Link | None
+		exchange_gain_loss_account: DF.Link | None
+		existing_company: DF.Link | None
+		fax: DF.Data | None
+		is_group: DF.Check
+		lft: DF.Int
+		monthly_sales_target: DF.Currency
+		old_parent: DF.Data | None
+		parent_company: DF.Link | None
+		payment_terms: DF.Link | None
+		phone_no: DF.Data | None
+		registration_details: DF.Code | None
+		rgt: DF.Int
+		round_off_account: DF.Link | None
+		round_off_cost_center: DF.Link | None
+		sales_monthly_history: DF.SmallText | None
+		series_for_depreciation_entry: DF.Data | None
+		stock_adjustment_account: DF.Link | None
+		stock_received_but_not_billed: DF.Link | None
+		submit_err_jv: DF.Check
+		tax_id: DF.Data | None
+		total_monthly_sales: DF.Currency
+		transactions_annual_history: DF.Code | None
+		unrealized_exchange_gain_loss_account: DF.Link | None
+		unrealized_profit_loss_account: DF.Link | None
+		website: DF.Data | None
+		write_off_account: DF.Link | None
+	# end: auto-generated types
+
 	nsm_parent_field = "parent_company"
 
 	def onload(self):
@@ -403,14 +488,20 @@ class Company(NestedSet):
 				self._set_default_account(default_account, default_accounts.get(default_account))
 
 		if not self.default_income_account:
-			income_account = dontmanage.db.get_value(
-				"Account", {"account_name": _("Sales"), "company": self.name, "is_group": 0}
+			income_account = dontmanage.db.get_all(
+				"Account",
+				filters={"company": self.name, "is_group": 0},
+				or_filters={
+					"account_name": ("in", [_("Sales"), _("Sales Account")]),
+					"account_type": "Income Account",
+				},
+				pluck="name",
 			)
 
-			if not income_account:
-				income_account = dontmanage.db.get_value(
-					"Account", {"account_name": _("Sales Account"), "company": self.name}
-				)
+			if income_account:
+				income_account = income_account[0]
+			else:
+				income_account = None
 
 			self.db_set("default_income_account", income_account)
 
@@ -813,8 +904,37 @@ def get_default_company_address(name, sort_key="is_primary_address", existing_ad
 		return None
 
 
+def generate_id_for_deletion_job(company):
+	return "delete_company_transactions_" + company
+
+
+@dontmanage.whitelist()
+def is_deletion_job_running(company):
+	job_id = generate_id_for_deletion_job(company)
+	if is_job_enqueued(job_id):
+		job_name = get_job(job_id).get_id()  # job name will have site prefix
+		dontmanage.throw(
+			_("A Transaction Deletion Job: {0} is already running for {1}").format(
+				dontmanage.bold(get_link_to_form("RQ Job", job_name)), dontmanage.bold(company)
+			)
+		)
+
+
 @dontmanage.whitelist()
 def create_transaction_deletion_request(company):
+	is_deletion_job_running(company)
+	job_id = generate_id_for_deletion_job(company)
+
 	tdr = dontmanage.get_doc({"doctype": "Transaction Deletion Record", "company": company})
 	tdr.insert()
-	tdr.submit()
+
+	dontmanage.enqueue(
+		"dontmanage.utils.background_jobs.run_doc_method",
+		doctype=tdr.doctype,
+		name=tdr.name,
+		doc_method="submit",
+		job_id=job_id,
+		queue="long",
+		enqueue_after_commit=True,
+	)
+	dontmanage.msgprint(_("A Transaction Deletion Job is triggered for {0}").format(dontmanage.bold(company)))

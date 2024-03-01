@@ -23,14 +23,14 @@ dontmanage.query_reports["Customer Acquisition and Loyalty"] = {
 			"fieldname":"from_date",
 			"label": __("From Date"),
 			"fieldtype": "Date",
-			"default": dontmanage.defaults.get_user_default("year_start_date"),
+			"default": dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[1],
 			"reqd": 1
 		},
 		{
 			"fieldname":"to_date",
 			"label": __("To Date"),
 			"fieldtype": "Date",
-			"default": dontmanage.defaults.get_user_default("year_end_date"),
+			"default": dontmanageerp.utils.get_fiscal_year(dontmanage.datetime.get_today(), true)[2],
 			"reqd": 1
 		}
 	],

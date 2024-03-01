@@ -38,24 +38,6 @@ dontmanage.query_reports["Accounts Payable"] = {
 			}
 		},
 		{
-			"fieldname": "supplier",
-			"label": __("Supplier"),
-			"fieldtype": "Link",
-			"options": "Supplier",
-			on_change: () => {
-				var supplier = dontmanage.query_report.get_filter_value('supplier');
-				if (supplier) {
-					dontmanage.db.get_value('Supplier', supplier, "tax_id", function(value) {
-						dontmanage.query_report.set_filter_value('tax_id', value["tax_id"]);
-					});
-				} else {
-					dontmanage.query_report.set_filter_value('tax_id', "");
-				}
-
-				dontmanage.query_report.refresh();
-			}
-		},
-		{
 			"fieldname": "party_account",
 			"label": __("Payable Account"),
 			"fieldtype": "Link",
@@ -113,10 +95,34 @@ dontmanage.query_reports["Accounts Payable"] = {
 			"options": "Payment Terms Template"
 		},
 		{
+			"fieldname":"party_type",
+			"label": __("Party Type"),
+			"fieldtype": "Autocomplete",
+			options: get_party_type_options(),
+			on_change: function() {
+				dontmanage.query_report.set_filter_value('party', "");
+				dontmanage.query_report.toggle_filter_display('supplier_group', dontmanage.query_report.get_filter_value('party_type') !== "Supplier");
+			}
+		},
+		{
+			"fieldname":"party",
+			"label": __("Party"),
+			"fieldtype": "MultiSelectList",
+			get_data: function(txt) {
+				if (!dontmanage.query_report.filters) return;
+
+				let party_type = dontmanage.query_report.get_filter_value('party_type');
+				if (!party_type) return;
+
+				return dontmanage.db.get_link_options(party_type, txt);
+			},
+		},
+		{
 			"fieldname": "supplier_group",
 			"label": __("Supplier Group"),
 			"fieldtype": "Link",
-			"options": "Supplier Group"
+			"options": "Supplier Group",
+			"hidden": 1
 		},
 		{
 			"fieldname": "group_by_party",
@@ -134,14 +140,23 @@ dontmanage.query_reports["Accounts Payable"] = {
 			"fieldtype": "Check",
 		},
 		{
-			"fieldname": "tax_id",
-			"label": __("Tax Id"),
-			"fieldtype": "Data",
-			"hidden": 1
-		},
-		{
 			"fieldname": "show_future_payments",
 			"label": __("Show Future Payments"),
+			"fieldtype": "Check",
+		},
+		{
+			"fieldname": "for_revaluation_journals",
+			"label": __("Revaluation Journals"),
+			"fieldtype": "Check",
+		},
+		{
+			"fieldname": "ignore_accounts",
+			"label": __("Group by Voucher"),
+			"fieldtype": "Check",
+		},
+		{
+			"fieldname": "in_party_currency",
+			"label": __("In Party Currency"),
 			"fieldtype": "Check",
 		}
 	],
@@ -164,3 +179,15 @@ dontmanage.query_reports["Accounts Payable"] = {
 }
 
 dontmanageerp.utils.add_dimensions('Accounts Payable', 9);
+
+function get_party_type_options() {
+	let options = [];
+	dontmanage.db.get_list(
+		"Party Type", {filters:{"account_type": "Payable"}, fields:['name']}
+	).then((res) => {
+		res.forEach((party_type) => {
+			options.push(party_type.name);
+		});
+	});
+	return options;
+}

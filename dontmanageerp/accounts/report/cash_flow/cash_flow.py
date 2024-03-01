@@ -4,7 +4,7 @@
 
 import dontmanage
 from dontmanage import _
-from dontmanage.utils import cint, cstr
+from dontmanage.utils import cstr
 
 from dontmanageerp.accounts.report.financial_statements import (
 	get_columns,
@@ -20,11 +20,6 @@ from dontmanageerp.accounts.utils import get_fiscal_year
 
 
 def execute(filters=None):
-	if cint(dontmanage.db.get_single_value("Accounts Settings", "use_custom_cash_flow")):
-		from dontmanageerp.accounts.report.cash_flow.custom_cash_flow import execute as execute_custom
-
-		return execute_custom(filters=filters)
-
 	period_list = get_period_list(
 		filters.from_fiscal_year,
 		filters.to_fiscal_year,
@@ -182,7 +177,7 @@ def get_account_type_based_gl_data(company, filters=None):
 	filters = dontmanage._dict(filters or {})
 
 	if filters.include_default_book_entries:
-		company_fb = dontmanage.db.get_value("Company", company, "default_finance_book")
+		company_fb = dontmanage.get_cached_value("Company", company, "default_finance_book")
 		cond = """ AND (finance_book in (%s, %s, '') OR finance_book IS NULL)
 			""" % (
 			dontmanage.db.escape(filters.finance_book),

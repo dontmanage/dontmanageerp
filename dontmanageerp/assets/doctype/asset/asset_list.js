@@ -36,7 +36,7 @@ dontmanage.listview_settings['Asset'] = {
 		}
 	},
 	onload: function(me) {
-		me.page.add_action_item('Make Asset Movement', function() {
+		me.page.add_action_item(__("Make Asset Movement"), function() {
 			const assets = me.get_checked_items();
 			dontmanage.call({
 				method: "dontmanageerp.assets.doctype.asset.asset.make_asset_movement",

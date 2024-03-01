@@ -43,7 +43,7 @@ def start_payment_ledger_repost(docname=None):
 			except Exception as e:
 				dontmanage.db.rollback()
 
-				traceback = dontmanage.get_traceback()
+				traceback = dontmanage.get_traceback(with_context=True)
 				if traceback:
 					message = "Traceback: <br>" + traceback
 					dontmanage.db.set_value(repost_doc.doctype, repost_doc.name, "repost_error_log", message)
@@ -52,6 +52,28 @@ def start_payment_ledger_repost(docname=None):
 
 
 class RepostPaymentLedger(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.accounts.doctype.repost_payment_ledger_items.repost_payment_ledger_items import (
+			RepostPaymentLedgerItems,
+		)
+
+		add_manually: DF.Check
+		amended_from: DF.Link | None
+		company: DF.Link
+		posting_date: DF.Date
+		repost_error_log: DF.LongText | None
+		repost_status: DF.Literal["", "Queued", "Failed", "Completed"]
+		repost_vouchers: DF.Table[RepostPaymentLedgerItems]
+		voucher_type: DF.Link | None
+	# end: auto-generated types
+
 	def __init__(self, *args, **kwargs):
 		super(RepostPaymentLedger, self).__init__(*args, **kwargs)
 		self.vouchers = []

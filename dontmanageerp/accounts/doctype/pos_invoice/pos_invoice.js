@@ -1,9 +1,10 @@
 // Copyright (c) 2020, DontManage and contributors
 // For license information, please see license.txt
 
-{% include 'dontmanageerp/selling/sales_common.js' %};
 dontmanage.provide("dontmanageerp.accounts");
+dontmanageerp.sales_common.setup_selling_controller();
 
+dontmanageerp.accounts.pos.setup("POS Invoice");
 dontmanageerp.selling.POSInvoiceController = class POSInvoiceController extends dontmanageerp.selling.SellingController {
 	settings = {};
 
@@ -20,7 +21,7 @@ dontmanageerp.selling.POSInvoiceController = class POSInvoiceController extends 
 
 	onload(doc) {
 		super.onload();
-		this.frm.ignore_doctypes_on_cancel_all = ['POS Invoice Merge Log', 'POS Closing Entry'];
+		this.frm.ignore_doctypes_on_cancel_all = ['POS Invoice Merge Log', 'POS Closing Entry', 'Serial and Batch Bundle'];
 
 		if(doc.__islocal && doc.is_pos && dontmanage.get_route_str() !== 'point-of-sale') {
 			this.frm.script_manager.trigger("is_pos");
@@ -130,6 +131,7 @@ dontmanageerp.selling.POSInvoiceController = class POSInvoiceController extends 
 			args: { "pos_profile": frm.pos_profile },
 			callback: ({ message: profile }) => {
 				this.update_customer_groups_settings(profile?.customer_groups);
+				this.frm.set_value("company", profile?.company);
 			},
 		});
 	}

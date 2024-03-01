@@ -54,6 +54,8 @@ class TestMaterialRequest(DontManageTestCase):
 		mr.submit()
 		se = make_stock_entry(mr.name)
 
+		self.assertEqual(se.stock_entry_type, "Material Transfer")
+		self.assertEqual(se.purpose, "Material Transfer")
 		self.assertEqual(se.doctype, "Stock Entry")
 		self.assertEqual(len(se.get("items")), len(mr.get("items")))
 
@@ -69,6 +71,8 @@ class TestMaterialRequest(DontManageTestCase):
 		in_transit_warehouse = get_in_transit_warehouse(mr.company)
 		se = make_in_transit_stock_entry(mr.name, in_transit_warehouse)
 
+		self.assertEqual(se.stock_entry_type, "Material Transfer")
+		self.assertEqual(se.purpose, "Material Transfer")
 		self.assertEqual(se.doctype, "Stock Entry")
 		for row in se.get("items"):
 			self.assertEqual(row.t_warehouse, in_transit_warehouse)
@@ -396,7 +400,7 @@ class TestMaterialRequest(DontManageTestCase):
 		mr.insert()
 		mr.submit()
 
-		dontmanage.db.set_value("Stock Settings", None, "mr_qty_allowance", 20)
+		dontmanage.db.set_single_value("Stock Settings", "mr_qty_allowance", 20)
 
 		# map a stock entry
 
@@ -757,6 +761,62 @@ class TestMaterialRequest(DontManageTestCase):
 
 		self.assertEqual(mr.per_ordered, 100)
 		self.assertEqual(existing_requested_qty, current_requested_qty)
+
+	def test_auto_email_users_with_company_user_permissions(self):
+		from dontmanageerp.stock.reorder_item import get_email_list
+
+		comapnywise_users = {
+			"_Test Company": "test_auto_email_@example.com",
+			"_Test Company 1": "test_auto_email_1@example.com",
+		}
+
+		permissions = []
+
+		for company, user in comapnywise_users.items():
+			if not dontmanage.db.exists("User", user):
+				dontmanage.get_doc(
+					{
+						"doctype": "User",
+						"email": user,
+						"first_name": user,
+						"send_notifications": 0,
+						"enabled": 1,
+						"user_type": "System User",
+						"roles": [{"role": "Purchase Manager"}],
+					}
+				).insert(ignore_permissions=True)
+
+			if not dontmanage.db.exists(
+				"User Permission", {"user": user, "allow": "Company", "for_value": company}
+			):
+				perm_doc = dontmanage.get_doc(
+					{
+						"doctype": "User Permission",
+						"user": user,
+						"allow": "Company",
+						"for_value": company,
+						"apply_to_all_doctypes": 1,
+					}
+				).insert(ignore_permissions=True)
+
+				permissions.append(perm_doc)
+
+		comapnywise_mr_list = dontmanage._dict({})
+		mr1 = make_material_request()
+		comapnywise_mr_list.setdefault(mr1.company, []).append(mr1.name)
+
+		mr2 = make_material_request(
+			company="_Test Company 1", warehouse="Stores - _TC1", cost_center="Main - _TC1"
+		)
+		comapnywise_mr_list.setdefault(mr2.company, []).append(mr2.name)
+
+		for company, mr_list in comapnywise_mr_list.items():
+			emails = get_email_list(company)
+
+			self.assertTrue(comapnywise_users[company] in emails)
+
+		for perm in permissions:
+			perm.delete()
 
 
 def get_in_transit_warehouse(company):

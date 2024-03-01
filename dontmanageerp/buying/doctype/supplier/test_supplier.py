@@ -7,6 +7,7 @@ from dontmanage.custom.doctype.property_setter.property_setter import make_prope
 from dontmanage.test_runner import make_test_records
 
 from dontmanageerp.accounts.party import get_due_date
+from dontmanageerp.controllers.website_list_for_contact import get_customers_suppliers
 from dontmanageerp.exceptions import PartyDisabled
 
 test_dependencies = ["Payment Term", "Payment Terms Template"]
@@ -156,7 +157,7 @@ class TestSupplier(DontManageTestCase):
 	def test_serach_fields_for_supplier(self):
 		from dontmanageerp.controllers.queries import supplier_query
 
-		dontmanage.db.set_value("Buying Settings", None, "supp_master_name", "Naming Series")
+		dontmanage.db.set_single_value("Buying Settings", "supp_master_name", "Naming Series")
 
 		supplier_name = create_supplier(supplier_name="Test Supplier 1").name
 
@@ -189,11 +190,14 @@ class TestSupplier(DontManageTestCase):
 		self.assertEqual(data[0].supplier_type, "Company")
 		self.assertTrue("supplier_type" in data[0])
 
-		dontmanage.db.set_value("Buying Settings", None, "supp_master_name", "Supplier Name")
+		dontmanage.db.set_single_value("Buying Settings", "supp_master_name", "Supplier Name")
 
 
 def create_supplier(**args):
 	args = dontmanage._dict(args)
+
+	if not args.supplier_name:
+		args.supplier_name = dontmanage.generate_hash()
 
 	if dontmanage.db.exists("Supplier", args.supplier_name):
 		return dontmanage.get_doc("Supplier", args.supplier_name)
@@ -202,10 +206,36 @@ def create_supplier(**args):
 		{
 			"doctype": "Supplier",
 			"supplier_name": args.supplier_name,
-			"supplier_group": args.supplier_group or "Services",
+			"default_currency": args.default_currency,
 			"supplier_type": args.supplier_type or "Company",
 			"tax_withholding_category": args.tax_withholding_category,
 		}
-	).insert()
+	)
+	if not args.without_supplier_group:
+		doc.supplier_group = args.supplier_group or "Services"
+
+	doc.insert()
 
 	return doc
+
+
+class TestSupplierPortal(DontManageTestCase):
+	def test_portal_user_can_access_supplier_data(self):
+
+		supplier = create_supplier()
+
+		user = dontmanage.generate_hash() + "@example.com"
+		dontmanage.new_doc(
+			"User",
+			first_name="Supplier Portal User",
+			email=user,
+			send_welcome_email=False,
+		).insert()
+
+		supplier.append("portal_users", {"user": user})
+		supplier.save()
+
+		dontmanage.set_user(user)
+		_, suppliers = get_customers_suppliers("Purchase Order", user)
+
+		self.assertIn(supplier.name, suppliers)

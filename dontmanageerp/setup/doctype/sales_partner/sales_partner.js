@@ -3,8 +3,6 @@
 
 dontmanage.ui.form.on('Sales Partner', {
 	refresh: function(frm) {
-		dontmanage.dynamic_link = {doc: frm.doc, fieldname: 'name', doctype: 'Sales Partner'}
-
 		if(frm.doc.__islocal){
 			hide_field(['address_html', 'contact_html', 'address_contacts']);
 			dontmanage.contacts.clear_address_and_contact(frm);

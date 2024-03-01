@@ -9,9 +9,37 @@ from dontmanage.contacts.address_and_contact import (
 	load_address_and_contact,
 )
 from dontmanage.model.document import Document
+from dontmanage.utils import comma_and, get_link_to_form
 
 
 class BankAccount(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		account: DF.Link | None
+		account_name: DF.Data
+		account_subtype: DF.Link | None
+		account_type: DF.Link | None
+		bank: DF.Link
+		bank_account_no: DF.Data | None
+		branch_code: DF.Data | None
+		company: DF.Link | None
+		disabled: DF.Check
+		iban: DF.Data | None
+		integration_id: DF.Data | None
+		is_company_account: DF.Check
+		is_default: DF.Check
+		last_integration_date: DF.Date | None
+		mask: DF.Data | None
+		party: DF.DynamicLink | None
+		party_type: DF.Link | None
+	# end: auto-generated types
+
 	def onload(self):
 		"""Load address and contacts in `__onload`"""
 		load_address_and_contact(self)
@@ -25,6 +53,17 @@ class BankAccount(Document):
 	def validate(self):
 		self.validate_company()
 		self.validate_iban()
+		self.validate_account()
+
+	def validate_account(self):
+		if self.account:
+			if accounts := dontmanage.db.get_all("Bank Account", filters={"account": self.account}, as_list=1):
+				dontmanage.throw(
+					_("'{0}' account is already used by {1}. Use another account.").format(
+						dontmanage.bold(self.account),
+						dontmanage.bold(comma_and([get_link_to_form(self.doctype, x[0]) for x in accounts])),
+					)
+				)
 
 	def validate_company(self):
 		if self.is_company_account and not self.company:
@@ -70,13 +109,12 @@ def make_bank_account(doctype, docname):
 	return doc
 
 
-@dontmanage.whitelist()
 def get_party_bank_account(party_type, party):
 	return dontmanage.db.get_value(party_type, party, "default_bank_account")
 
 
 @dontmanage.whitelist()
 def get_bank_account_details(bank_account):
-	return dontmanage.db.get_value(
+	return dontmanage.get_cached_value(
 		"Bank Account", bank_account, ["account", "bank", "bank_account_no"], as_dict=1
 	)

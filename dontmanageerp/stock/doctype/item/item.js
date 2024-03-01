@@ -3,6 +3,9 @@
 
 dontmanage.provide("dontmanageerp.item");
 
+const SALES_DOCTYPES = ['Quotation', 'Sales Order', 'Delivery Note', 'Sales Invoice'];
+const PURCHASE_DOCTYPES = ['Purchase Order', 'Purchase Receipt', 'Purchase Invoice'];
+
 dontmanage.ui.form.on("Item", {
 	setup: function(frm) {
 		frm.add_fetch('attribute', 'numeric_values', 'numeric_values');
@@ -120,36 +123,6 @@ dontmanage.ui.form.on("Item", {
 			frm.toggle_display("naming_series", false);
 		} else {
 			dontmanageerp.toggle_naming_series();
-		}
-
-		if (!frm.doc.published_in_website) {
-			frm.add_custom_button(__("Publish in Website"), function() {
-				dontmanage.call({
-					method: "dontmanageerp.e_commerce.doctype.website_item.website_item.make_website_item",
-					args: {doc: frm.doc},
-					freeze: true,
-					freeze_message: __("Publishing Item ..."),
-					callback: function(result) {
-						dontmanage.msgprint({
-							message: __("Website Item {0} has been created.",
-								[repl('<a href="/app/website-item/%(item_encoded)s" class="strong">%(item)s</a>', {
-									item_encoded: encodeURIComponent(result.message[0]),
-									item: result.message[1]
-								})]
-							),
-							title: __("Published"),
-							indicator: "green"
-						});
-					}
-				});
-			}, __('Actions'));
-		} else {
-			frm.add_custom_button(__("Website Item"), function() {
-				dontmanage.db.get_value("Website Item", {item_code: frm.doc.name}, "name", (d) => {
-					if (!d.name) dontmanage.throw(__("Website Item not found"));
-					dontmanage.set_route("Form", "Website Item", d.name);
-				});
-			}, __("View"));
 		}
 
 		dontmanageerp.item.edit_prices_button(frm);
@@ -347,18 +320,20 @@ $.extend(dontmanageerp.item, {
 			}
 		}
 
-		frm.fields_dict['deferred_revenue_account'].get_query = function() {
+		frm.fields_dict["item_defaults"].grid.get_field("deferred_revenue_account").get_query = function(doc, cdt, cdn) {
 			return {
 				filters: {
+					"company": locals[cdt][cdn].company,
 					'root_type': 'Liability',
 					"is_group": 0
 				}
 			}
 		}
 
-		frm.fields_dict['deferred_expense_account'].get_query = function() {
+		frm.fields_dict["item_defaults"].grid.get_field("deferred_expense_account").get_query = function(doc, cdt, cdn) {
 			return {
 				filters: {
+					"company": locals[cdt][cdn].company,
 					'root_type': 'Asset',
 					"is_group": 0
 				}
@@ -590,7 +565,7 @@ $.extend(dontmanageerp.item, {
 			let selected_attributes = {};
 			me.multiple_variant_dialog.$wrapper.find('.form-column').each((i, col) => {
 				if(i===0) return;
-				let attribute_name = $(col).find('.control-label').html().trim();
+				let attribute_name = $(col).find('.column-label').html().trim();
 				selected_attributes[attribute_name] = [];
 				let checked_opts = $(col).find('.checkbox input');
 				checked_opts.each((i, opt) => {
@@ -625,26 +600,12 @@ $.extend(dontmanageerp.item, {
 						}
 					});
 				} else {
-					dontmanage.call({
-						method: "dontmanage.client.get",
-						args: {
-							doctype: "Item Attribute",
-							name: d.attribute
-						}
-					}).then((r) => {
-						if(r.message) {
-							const from = r.message.from_range;
-							const to = r.message.to_range;
-							const increment = r.message.increment;
-
-							let values = [];
-							for(var i = from; i <= to; i = flt(i + increment, 6)) {
-								values.push(i);
-							}
-							attr_val_fields[d.attribute] = values;
-							resolve();
-						}
-					});
+					let values = [];
+					for(var i = d.from_range; i <= d.to_range; i = flt(i + d.increment, 6)) {
+						values.push(i);
+					}
+					attr_val_fields[d.attribute] = values;
+					resolve();
 				}
 			});
 
@@ -772,12 +733,6 @@ $.extend(dontmanageerp.item, {
 					if (modal) {
 						$(modal).removeClass("modal-dialog-scrollable");
 					}
-				})
-				.on("awesomplete-close", () => {
-					let modal = field.$input.parents('.modal-dialog')[0];
-					if (modal) {
-						$(modal).addClass("modal-dialog-scrollable");
-					}
 				});
 		});
 	},
@@ -894,7 +849,13 @@ function open_form(frm, doctype, child_doctype, parentfield) {
 		let new_child_doc = dontmanage.model.add_child(new_doc, child_doctype, parentfield);
 		new_child_doc.item_code = frm.doc.name;
 		new_child_doc.item_name = frm.doc.item_name;
-		new_child_doc.uom = frm.doc.stock_uom;
+		if (in_list(SALES_DOCTYPES, doctype) && frm.doc.sales_uom) {
+			new_child_doc.uom = frm.doc.sales_uom;
+		} else if (in_list(PURCHASE_DOCTYPES, doctype) && frm.doc.purchase_uom) {
+			new_child_doc.uom = frm.doc.purchase_uom;
+		} else {
+			new_child_doc.uom = frm.doc.stock_uom;
+		}
 		new_child_doc.description = frm.doc.description;
 		if (!new_child_doc.qty) {
 			new_child_doc.qty = 1.0;

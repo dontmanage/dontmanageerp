@@ -11,7 +11,11 @@ from dontmanage.utils import (
 	comma_and,
 	flt,
 	formatdate,
+	get_link_to_form,
+	get_time,
+	get_url_to_form,
 	getdate,
+	time_diff_in_hours,
 	time_diff_in_seconds,
 	to_timedelta,
 )
@@ -32,9 +36,51 @@ class OverlapError(dontmanage.ValidationError):
 
 
 class Workstation(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		from dontmanageerp.manufacturing.doctype.workstation_working_hour.workstation_working_hour import (
+			WorkstationWorkingHour,
+		)
+
+		description: DF.Text | None
+		holiday_list: DF.Link | None
+		hour_rate: DF.Currency
+		hour_rate_consumable: DF.Currency
+		hour_rate_electricity: DF.Currency
+		hour_rate_labour: DF.Currency
+		hour_rate_rent: DF.Currency
+		production_capacity: DF.Int
+		working_hours: DF.Table[WorkstationWorkingHour]
+		workstation_name: DF.Data
+		workstation_type: DF.Link | None
+	# end: auto-generated types
+
 	def before_save(self):
 		self.set_data_based_on_workstation_type()
 		self.set_hour_rate()
+		self.set_total_working_hours()
+
+	def set_total_working_hours(self):
+		self.total_working_hours = 0.0
+		for row in self.working_hours:
+			self.validate_working_hours(row)
+
+			if row.start_time and row.end_time:
+				row.hours = flt(time_diff_in_hours(row.end_time, row.start_time), row.precision("hours"))
+				self.total_working_hours += row.hours
+
+	def validate_working_hours(self, row):
+		if not (row.start_time and row.end_time):
+			dontmanage.throw(_("Row #{0}: Start Time and End Time are required").format(row.idx))
+
+		if get_time(row.start_time) >= get_time(row.end_time):
+			dontmanage.throw(_("Row #{0}: Start Time must be before End Time").format(row.idx))
 
 	def set_hour_rate(self):
 		self.hour_rate = (
@@ -114,9 +160,144 @@ class Workstation(Document):
 
 		if schedule_date in tuple(get_holidays(self.holiday_list)):
 			schedule_date = add_days(schedule_date, 1)
-			self.validate_workstation_holiday(schedule_date, skip_holiday_list_check=True)
+			return self.validate_workstation_holiday(schedule_date, skip_holiday_list_check=True)
 
 		return schedule_date
+
+	@dontmanage.whitelist()
+	def start_job(self, job_card, from_time, employee):
+		doc = dontmanage.get_doc("Job Card", job_card)
+		doc.append("time_logs", {"from_time": from_time, "employee": employee})
+		doc.save(ignore_permissions=True)
+
+		return doc
+
+	@dontmanage.whitelist()
+	def complete_job(self, job_card, qty, to_time):
+		doc = dontmanage.get_doc("Job Card", job_card)
+		for row in doc.time_logs:
+			if not row.to_time:
+				row.to_time = to_time
+				row.time_in_mins = time_diff_in_hours(row.to_time, row.from_time) / 60
+				row.completed_qty = qty
+
+		doc.save(ignore_permissions=True)
+		doc.submit()
+
+		return doc
+
+
+@dontmanage.whitelist()
+def get_job_cards(workstation):
+	if dontmanage.has_permission("Job Card", "read"):
+		jc_data = dontmanage.get_all(
+			"Job Card",
+			fields=[
+				"name",
+				"production_item",
+				"work_order",
+				"operation",
+				"total_completed_qty",
+				"for_quantity",
+				"transferred_qty",
+				"status",
+				"expected_start_date",
+				"expected_end_date",
+				"time_required",
+				"wip_warehouse",
+			],
+			filters={
+				"workstation": workstation,
+				"docstatus": ("<", 2),
+				"status": ["not in", ["Completed", "Stopped"]],
+			},
+			order_by="expected_start_date, expected_end_date",
+		)
+
+		job_cards = [row.name for row in jc_data]
+		raw_materials = get_raw_materials(job_cards)
+		time_logs = get_time_logs(job_cards)
+
+		allow_excess_transfer = dontmanage.db.get_single_value(
+			"Manufacturing Settings", "job_card_excess_transfer"
+		)
+
+		for row in jc_data:
+			row.progress_percent = (
+				flt(row.total_completed_qty / row.for_quantity * 100, 2) if row.for_quantity else 0
+			)
+			row.progress_title = _("Total completed quantity: {0}").format(row.total_completed_qty)
+			row.status_color = get_status_color(row.status)
+			row.job_card_link = get_link_to_form("Job Card", row.name)
+			row.work_order_link = get_link_to_form("Work Order", row.work_order)
+
+			row.raw_materials = raw_materials.get(row.name, [])
+			row.time_logs = time_logs.get(row.name, [])
+			row.make_material_request = False
+			if row.for_quantity > row.transferred_qty or allow_excess_transfer:
+				row.make_material_request = True
+
+		return jc_data
+
+
+def get_status_color(status):
+	color_map = {
+		"Pending": "var(--bg-blue)",
+		"In Process": "var(--bg-yellow)",
+		"Submitted": "var(--bg-blue)",
+		"Open": "var(--bg-gray)",
+		"Closed": "var(--bg-green)",
+		"Work In Progress": "var(--bg-orange)",
+	}
+
+	return color_map.get(status, "var(--bg-blue)")
+
+
+def get_raw_materials(job_cards):
+	raw_materials = {}
+
+	data = dontmanage.get_all(
+		"Job Card Item",
+		fields=[
+			"parent",
+			"item_code",
+			"item_group",
+			"uom",
+			"item_name",
+			"source_warehouse",
+			"required_qty",
+			"transferred_qty",
+		],
+		filters={"parent": ["in", job_cards]},
+	)
+
+	for row in data:
+		raw_materials.setdefault(row.parent, []).append(row)
+
+	return raw_materials
+
+
+def get_time_logs(job_cards):
+	time_logs = {}
+
+	data = dontmanage.get_all(
+		"Job Card Time Log",
+		fields=[
+			"parent",
+			"name",
+			"employee",
+			"from_time",
+			"to_time",
+			"time_in_mins",
+		],
+		filters={"parent": ["in", job_cards], "parentfield": "time_logs"},
+		order_by="parent, idx",
+	)
+
+	for row in data:
+		time_logs.setdefault(row.parent, []).append(row)
+
+	return time_logs
 
 
 @dontmanage.whitelist()
@@ -128,10 +309,7 @@ def get_default_holiday_list():
 
 def check_if_within_operating_hours(workstation, operation, from_datetime, to_datetime):
 	if from_datetime and to_datetime:
-
-		if not cint(
-			dontmanage.db.get_value("Manufacturing Settings", "None", "allow_production_on_holidays")
-		):
+		if not dontmanage.db.get_single_value("Manufacturing Settings", "allow_production_on_holidays"):
 			check_workstation_for_holiday(workstation, from_datetime, to_datetime)
 
 		if not cint(dontmanage.db.get_value("Manufacturing Settings", None, "allow_overtime")):
@@ -179,3 +357,52 @@ def check_workstation_for_holiday(workstation, from_datetime, to_datetime):
 				+ "\n".join(applicable_holidays),
 				WorkstationHolidayError,
 			)
+
+
+@dontmanage.whitelist()
+def get_workstations(**kwargs):
+	kwargs = dontmanage._dict(kwargs)
+	_workstation = dontmanage.qb.DocType("Workstation")
+
+	query = (
+		dontmanage.qb.from_(_workstation)
+		.select(
+			_workstation.name,
+			_workstation.description,
+			_workstation.status,
+			_workstation.on_status_image,
+			_workstation.off_status_image,
+		)
+		.orderby(_workstation.workstation_type, _workstation.name)
+		.where(_workstation.plant_floor == kwargs.plant_floor)
+	)
+
+	if kwargs.workstation:
+		query = query.where(_workstation.name == kwargs.workstation)
+
+	if kwargs.workstation_type:
+		query = query.where(_workstation.workstation_type == kwargs.workstation_type)
+
+	if kwargs.workstation_status:
+		query = query.where(_workstation.status == kwargs.workstation_status)
+
+	data = query.run(as_dict=True)
+
+	color_map = {
+		"Production": "var(--green-600)",
+		"Off": "var(--gray-600)",
+		"Idle": "var(--gray-600)",
+		"Problem": "var(--red-600)",
+		"Maintenance": "var(--yellow-600)",
+		"Setup": "var(--blue-600)",
+	}
+
+	for d in data:
+		d.workstation_name = get_link_to_form("Workstation", d.name)
+		d.status_image = d.on_status_image
+		d.background_color = color_map.get(d.status, "var(--red-600)")
+		d.workstation_link = get_url_to_form("Workstation", d.name)
+		if d.status != "Production":
+			d.status_image = d.off_status_image
+
+	return data

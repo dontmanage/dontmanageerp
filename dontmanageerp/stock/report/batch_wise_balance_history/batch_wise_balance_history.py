@@ -4,15 +4,34 @@
 
 import dontmanage
 from dontmanage import _
-from dontmanage.utils import cint, flt, getdate
+from dontmanage.utils import cint, flt, get_table_name, getdate
+from dontmanage.utils.deprecations import deprecated
 from pypika import functions as fn
 
 from dontmanageerp.stock.doctype.warehouse.warehouse import apply_warehouse_filter
+
+SLE_COUNT_LIMIT = 10_000
+
+
+def _estimate_table_row_count(doctype: str):
+	table = get_table_name(doctype)
+	return cint(
+		dontmanage.db.sql(
+			f"""select table_rows
+			   from  information_schema.tables
+			   where table_name = '{table}' ;"""
+		)[0][0]
+	)
 
 
 def execute(filters=None):
 	if not filters:
 		filters = {}
+
+	sle_count = _estimate_table_row_count("Stock Ledger Entry")
+
+	if sle_count > SLE_COUNT_LIMIT and not filters.get("item_code") and not filters.get("warehouse"):
+		dontmanage.throw(_("Please select either the Item or Warehouse filter to generate the report."))
 
 	if filters.from_date > filters.to_date:
 		dontmanage.throw(_("From Date must be before To Date"))
@@ -67,8 +86,15 @@ def get_columns(filters):
 	return columns
 
 
-# get all details
 def get_stock_ledger_entries(filters):
+	entries = get_stock_ledger_entries_for_batch_no(filters)
+
+	entries += get_stock_ledger_entries_for_batch_bundle(filters)
+	return entries
+
+
+@deprecated
+def get_stock_ledger_entries_for_batch_no(filters):
 	if not filters.get("from_date"):
 		dontmanage.throw(_("'From Date' is required"))
 	if not filters.get("to_date"):
@@ -87,7 +113,7 @@ def get_stock_ledger_entries(filters):
 		.where(
 			(sle.docstatus < 2)
 			& (sle.is_cancelled == 0)
-			& (fn.IfNull(sle.batch_no, "") != "")
+			& (sle.batch_no != "")
 			& (sle.posting_date <= filters["to_date"])
 		)
 		.groupby(sle.voucher_no, sle.batch_no, sle.item_code, sle.warehouse)
@@ -99,7 +125,43 @@ def get_stock_ledger_entries(filters):
 		if filters.get(field):
 			query = query.where(sle[field] == filters.get(field))
 
-	return query.run(as_dict=True)
+	return query.run(as_dict=True) or []
+
+
+def get_stock_ledger_entries_for_batch_bundle(filters):
+	sle = dontmanage.qb.DocType("Stock Ledger Entry")
+	batch_package = dontmanage.qb.DocType("Serial and Batch Entry")
+
+	query = (
+		dontmanage.qb.from_(sle)
+		.inner_join(batch_package)
+		.on(batch_package.parent == sle.serial_and_batch_bundle)
+		.select(
+			sle.item_code,
+			sle.warehouse,
+			batch_package.batch_no,
+			sle.posting_date,
+			fn.Sum(batch_package.qty).as_("actual_qty"),
+		)
+		.where(
+			(sle.docstatus < 2)
+			& (sle.is_cancelled == 0)
+			& (sle.has_batch_no == 1)
+			& (sle.posting_date <= filters["to_date"])
+		)
+		.groupby(batch_package.batch_no, batch_package.warehouse)
+		.orderby(sle.item_code, sle.warehouse)
+	)
+
+	query = apply_warehouse_filter(query, sle, filters)
+	for field in ["item_code", "batch_no", "company"]:
+		if filters.get(field):
+			if field == "batch_no":
+				query = query.where(batch_package[field] == filters.get(field))
+			else:
+				query = query.where(sle[field] == filters.get(field))
+
+	return query.run(as_dict=True) or []
 
 
 def get_item_warehouse_batch_map(filters, float_precision):

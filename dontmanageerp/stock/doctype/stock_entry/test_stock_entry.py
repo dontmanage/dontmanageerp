@@ -5,7 +5,7 @@
 import dontmanage
 from dontmanage.permissions import add_user_permission, remove_user_permission
 from dontmanage.tests.utils import DontManageTestCase, change_settings
-from dontmanage.utils import add_days, flt, nowdate, nowtime, today
+from dontmanage.utils import add_days, add_to_date, flt, nowdate, nowtime, today
 
 from dontmanageerp.accounts.doctype.account.test_account import get_inventory_account
 from dontmanageerp.stock.doctype.item.test_item import (
@@ -14,12 +14,13 @@ from dontmanageerp.stock.doctype.item.test_item import (
 	make_item_variant,
 	set_item_variant_settings,
 )
-from dontmanageerp.stock.doctype.serial_no.serial_no import *  # noqa
-from dontmanageerp.stock.doctype.stock_entry.stock_entry import (
-	FinishedGoodError,
-	make_stock_in_entry,
-	move_sample_to_retention_warehouse,
+from dontmanageerp.stock.doctype.serial_and_batch_bundle.test_serial_and_batch_bundle import (
+	get_batch_from_bundle,
+	get_serial_nos_from_bundle,
+	make_serial_batch_bundle,
 )
+from dontmanageerp.stock.doctype.serial_no.serial_no import *  # noqa
+from dontmanageerp.stock.doctype.stock_entry.stock_entry import FinishedGoodError, make_stock_in_entry
 from dontmanageerp.stock.doctype.stock_entry.stock_entry_utils import make_stock_entry
 from dontmanageerp.stock.doctype.stock_ledger_entry.stock_ledger_entry import StockFreezeError
 from dontmanageerp.stock.doctype.stock_reconciliation.stock_reconciliation import (
@@ -28,6 +29,7 @@ from dontmanageerp.stock.doctype.stock_reconciliation.stock_reconciliation impor
 from dontmanageerp.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
 	create_stock_reconciliation,
 )
+from dontmanageerp.stock.serial_batch_bundle import SerialBatchCreation
 from dontmanageerp.stock.stock_ledger import NegativeStockError, get_previous_sle
 
 
@@ -53,7 +55,7 @@ class TestStockEntry(DontManageTestCase):
 		dontmanage.set_user("Administrator")
 
 	def test_fifo(self):
-		dontmanage.db.set_value("Stock Settings", None, "allow_negative_stock", 1)
+		dontmanage.db.set_single_value("Stock Settings", "allow_negative_stock", 1)
 		item_code = "_Test Item 2"
 		warehouse = "_Test Warehouse - _TC"
 
@@ -140,7 +142,7 @@ class TestStockEntry(DontManageTestCase):
 			or 0
 		)
 
-		dontmanage.db.set_value("Stock Settings", None, "auto_indent", 1)
+		dontmanage.db.set_single_value("Stock Settings", "auto_indent", 1)
 
 		# update re-level qty so that it is more than projected_qty
 		if projected_qty >= variant.reorder_levels[0].warehouse_reorder_level:
@@ -152,7 +154,7 @@ class TestStockEntry(DontManageTestCase):
 
 		mr_list = reorder_item()
 
-		dontmanage.db.set_value("Stock Settings", None, "auto_indent", 0)
+		dontmanage.db.set_single_value("Stock Settings", "auto_indent", 0)
 
 		items = []
 		for mr in mr_list:
@@ -202,6 +204,9 @@ class TestStockEntry(DontManageTestCase):
 		)
 
 		end_transit_entry = make_stock_in_entry(transit_entry.name)
+
+		self.assertEqual(end_transit_entry.stock_entry_type, "Material Transfer")
+		self.assertEqual(end_transit_entry.purpose, "Material Transfer")
 		self.assertEqual(transit_entry.name, end_transit_entry.outgoing_stock_entry)
 		self.assertEqual(transit_entry.name, end_transit_entry.items[0].against_stock_entry)
 		self.assertEqual(transit_entry.items[0].name, end_transit_entry.items[0].ste_detail)
@@ -546,28 +551,47 @@ class TestStockEntry(DontManageTestCase):
 	def test_serial_no_not_reqd(self):
 		se = dontmanage.copy_doc(test_records[0])
 		se.get("items")[0].serial_no = "ABCD"
-		se.set_stock_entry_type()
-		se.insert()
-		self.assertRaises(SerialNoNotRequiredError, se.submit)
+
+		bundle_id = make_serial_batch_bundle(
+			dontmanage._dict(
+				{
+					"item_code": se.get("items")[0].item_code,
+					"warehouse": se.get("items")[0].t_warehouse,
+					"company": se.company,
+					"qty": 2,
+					"voucher_type": "Stock Entry",
+					"serial_nos": ["ABCD"],
+					"posting_date": se.posting_date,
+					"posting_time": se.posting_time,
+					"do_not_save": True,
+				}
+			)
+		)
+
+		self.assertRaises(dontmanage.ValidationError, bundle_id.make_serial_and_batch_bundle)
 
 	def test_serial_no_reqd(self):
 		se = dontmanage.copy_doc(test_records[0])
 		se.get("items")[0].item_code = "_Test Serialized Item"
 		se.get("items")[0].qty = 2
 		se.get("items")[0].transfer_qty = 2
-		se.set_stock_entry_type()
-		se.insert()
-		self.assertRaises(SerialNoRequiredError, se.submit)
 
-	def test_serial_no_qty_more(self):
-		se = dontmanage.copy_doc(test_records[0])
-		se.get("items")[0].item_code = "_Test Serialized Item"
-		se.get("items")[0].qty = 2
-		se.get("items")[0].serial_no = "ABCD\nEFGH\nXYZ"
-		se.get("items")[0].transfer_qty = 2
-		se.set_stock_entry_type()
-		se.insert()
-		self.assertRaises(SerialNoQtyError, se.submit)
+		bundle_id = make_serial_batch_bundle(
+			dontmanage._dict(
+				{
+					"item_code": se.get("items")[0].item_code,
+					"warehouse": se.get("items")[0].t_warehouse,
+					"company": se.company,
+					"qty": 2,
+					"voucher_type": "Stock Entry",
+					"posting_date": se.posting_date,
+					"posting_time": se.posting_time,
+					"do_not_save": True,
+				}
+			)
+		)
+
+		self.assertRaises(dontmanage.ValidationError, bundle_id.make_serial_and_batch_bundle)
 
 	def test_serial_no_qty_less(self):
 		se = dontmanage.copy_doc(test_records[0])
@@ -575,91 +599,86 @@ class TestStockEntry(DontManageTestCase):
 		se.get("items")[0].qty = 2
 		se.get("items")[0].serial_no = "ABCD"
 		se.get("items")[0].transfer_qty = 2
-		se.set_stock_entry_type()
-		se.insert()
-		self.assertRaises(SerialNoQtyError, se.submit)
+
+		bundle_id = make_serial_batch_bundle(
+			dontmanage._dict(
+				{
+					"item_code": se.get("items")[0].item_code,
+					"warehouse": se.get("items")[0].t_warehouse,
+					"company": se.company,
+					"qty": 2,
+					"serial_nos": ["ABCD"],
+					"voucher_type": "Stock Entry",
+					"posting_date": se.posting_date,
+					"posting_time": se.posting_time,
+					"do_not_save": True,
+				}
+			)
+		)
+
+		self.assertRaises(dontmanage.ValidationError, bundle_id.make_serial_and_batch_bundle)
 
 	def test_serial_no_transfer_in(self):
+		serial_nos = ["ABCD1", "EFGH1"]
+		for serial_no in serial_nos:
+			if not dontmanage.db.exists("Serial No", serial_no):
+				doc = dontmanage.new_doc("Serial No")
+				doc.serial_no = serial_no
+				doc.item_code = "_Test Serialized Item"
+				doc.insert(ignore_permissions=True)
+
 		se = dontmanage.copy_doc(test_records[0])
 		se.get("items")[0].item_code = "_Test Serialized Item"
 		se.get("items")[0].qty = 2
-		se.get("items")[0].serial_no = "ABCD\nEFGH"
 		se.get("items")[0].transfer_qty = 2
 		se.set_stock_entry_type()
+
+		se.get("items")[0].serial_and_batch_bundle = make_serial_batch_bundle(
+			dontmanage._dict(
+				{
+					"item_code": se.get("items")[0].item_code,
+					"warehouse": se.get("items")[0].t_warehouse,
+					"company": se.company,
+					"qty": 2,
+					"voucher_type": "Stock Entry",
+					"serial_nos": serial_nos,
+					"posting_date": se.posting_date,
+					"posting_time": se.posting_time,
+					"do_not_submit": True,
+				}
+			)
+		).name
+
 		se.insert()
 		se.submit()
 
-		self.assertTrue(dontmanage.db.exists("Serial No", "ABCD"))
-		self.assertTrue(dontmanage.db.exists("Serial No", "EFGH"))
+		self.assertTrue(dontmanage.db.get_value("Serial No", "ABCD1", "warehouse"))
+		self.assertTrue(dontmanage.db.get_value("Serial No", "EFGH1", "warehouse"))
 
 		se.cancel()
-		self.assertFalse(dontmanage.db.get_value("Serial No", "ABCD", "warehouse"))
-
-	def test_serial_no_not_exists(self):
-		dontmanage.db.sql("delete from `tabSerial No` where name in ('ABCD', 'EFGH')")
-		make_serialized_item(target_warehouse="_Test Warehouse 1 - _TC")
-		se = dontmanage.copy_doc(test_records[0])
-		se.purpose = "Material Issue"
-		se.get("items")[0].item_code = "_Test Serialized Item With Series"
-		se.get("items")[0].qty = 2
-		se.get("items")[0].s_warehouse = "_Test Warehouse 1 - _TC"
-		se.get("items")[0].t_warehouse = None
-		se.get("items")[0].serial_no = "ABCD\nEFGH"
-		se.get("items")[0].transfer_qty = 2
-		se.set_stock_entry_type()
-		se.insert()
-
-		self.assertRaises(SerialNoNotExistsError, se.submit)
-
-	def test_serial_duplicate(self):
-		se, serial_nos = self.test_serial_by_series()
-
-		se = dontmanage.copy_doc(test_records[0])
-		se.get("items")[0].item_code = "_Test Serialized Item With Series"
-		se.get("items")[0].qty = 1
-		se.get("items")[0].serial_no = serial_nos[0]
-		se.get("items")[0].transfer_qty = 1
-		se.set_stock_entry_type()
-		se.insert()
-		self.assertRaises(SerialNoDuplicateError, se.submit)
+		self.assertFalse(dontmanage.db.get_value("Serial No", "ABCD1", "warehouse"))
 
 	def test_serial_by_series(self):
 		se = make_serialized_item()
 
-		serial_nos = get_serial_nos(se.get("items")[0].serial_no)
+		serial_nos = get_serial_nos_from_bundle(se.get("items")[0].serial_and_batch_bundle)
 
 		self.assertTrue(dontmanage.db.exists("Serial No", serial_nos[0]))
 		self.assertTrue(dontmanage.db.exists("Serial No", serial_nos[1]))
 
 		return se, serial_nos
 
-	def test_serial_item_error(self):
-		se, serial_nos = self.test_serial_by_series()
-		if not dontmanage.db.exists("Serial No", "ABCD"):
-			make_serialized_item(item_code="_Test Serialized Item", serial_no="ABCD\nEFGH")
-
-		se = dontmanage.copy_doc(test_records[0])
-		se.purpose = "Material Transfer"
-		se.get("items")[0].item_code = "_Test Serialized Item"
-		se.get("items")[0].qty = 1
-		se.get("items")[0].transfer_qty = 1
-		se.get("items")[0].serial_no = serial_nos[0]
-		se.get("items")[0].s_warehouse = "_Test Warehouse - _TC"
-		se.get("items")[0].t_warehouse = "_Test Warehouse 1 - _TC"
-		se.set_stock_entry_type()
-		se.insert()
-		self.assertRaises(SerialNoItemError, se.submit)
-
 	def test_serial_move(self):
 		se = make_serialized_item()
-		serial_no = get_serial_nos(se.get("items")[0].serial_no)[0]
+		serial_no = get_serial_nos_from_bundle(se.get("items")[0].serial_and_batch_bundle)[0]
+		dontmanage.flags.use_serial_and_batch_fields = True
 
 		se = dontmanage.copy_doc(test_records[0])
 		se.purpose = "Material Transfer"
 		se.get("items")[0].item_code = "_Test Serialized Item With Series"
 		se.get("items")[0].qty = 1
 		se.get("items")[0].transfer_qty = 1
-		se.get("items")[0].serial_no = serial_no
+		se.get("items")[0].serial_no = [serial_no]
 		se.get("items")[0].s_warehouse = "_Test Warehouse - _TC"
 		se.get("items")[0].t_warehouse = "_Test Warehouse 1 - _TC"
 		se.set_stock_entry_type()
@@ -673,30 +692,14 @@ class TestStockEntry(DontManageTestCase):
 		self.assertTrue(
 			dontmanage.db.get_value("Serial No", serial_no, "warehouse"), "_Test Warehouse - _TC"
 		)
-
-	def test_serial_warehouse_error(self):
-		make_serialized_item(target_warehouse="_Test Warehouse 1 - _TC")
-
-		t = make_serialized_item()
-		serial_nos = get_serial_nos(t.get("items")[0].serial_no)
-
-		se = dontmanage.copy_doc(test_records[0])
-		se.purpose = "Material Transfer"
-		se.get("items")[0].item_code = "_Test Serialized Item With Series"
-		se.get("items")[0].qty = 1
-		se.get("items")[0].transfer_qty = 1
-		se.get("items")[0].serial_no = serial_nos[0]
-		se.get("items")[0].s_warehouse = "_Test Warehouse 1 - _TC"
-		se.get("items")[0].t_warehouse = "_Test Warehouse - _TC"
-		se.set_stock_entry_type()
-		se.insert()
-		self.assertRaises(SerialNoWarehouseError, se.submit)
+		dontmanage.flags.use_serial_and_batch_fields = False
 
 	def test_serial_cancel(self):
 		se, serial_nos = self.test_serial_by_series()
-		se.cancel()
+		se.load_from_db()
+		serial_no = get_serial_nos_from_bundle(se.get("items")[0].serial_and_batch_bundle)[0]
 
-		serial_no = get_serial_nos(se.get("items")[0].serial_no)[0]
+		se.cancel()
 		self.assertFalse(dontmanage.db.get_value("Serial No", serial_no, "warehouse"))
 
 	def test_serial_batch_item_stock_entry(self):
@@ -723,8 +726,8 @@ class TestStockEntry(DontManageTestCase):
 		se = make_stock_entry(
 			item_code=item.item_code, target="_Test Warehouse - _TC", qty=1, basic_rate=100
 		)
-		batch_no = se.items[0].batch_no
-		serial_no = get_serial_nos(se.items[0].serial_no)[0]
+		batch_no = get_batch_from_bundle(se.items[0].serial_and_batch_bundle)
+		serial_no = get_serial_nos_from_bundle(se.items[0].serial_and_batch_bundle)[0]
 		batch_qty = get_batch_qty(batch_no, "_Test Warehouse - _TC", item.item_code)
 
 		batch_in_serial_no = dontmanage.db.get_value("Serial No", serial_no, "batch_no")
@@ -735,67 +738,7 @@ class TestStockEntry(DontManageTestCase):
 		se.cancel()
 
 		batch_in_serial_no = dontmanage.db.get_value("Serial No", serial_no, "batch_no")
-		self.assertEqual(batch_in_serial_no, None)
-
-		self.assertEqual(dontmanage.db.get_value("Serial No", serial_no, "status"), "Inactive")
-		self.assertEqual(dontmanage.db.exists("Batch", batch_no), None)
-
-	def test_serial_batch_item_qty_deduction(self):
-		"""
-		Behaviour: Create 2 Stock Entries, both adding Serial Nos to same batch
-		Expected: 1) Cancelling first Stock Entry (origin transaction of created batch)
-		should throw a LinkExistsError
-		2) Cancelling second Stock Entry should make Serial Nos that are, linked to mentioned batch
-		and in that transaction only, Inactive.
-		"""
-		from dontmanageerp.stock.doctype.batch.batch import get_batch_qty
-
-		item = dontmanage.db.exists("Item", {"item_name": "Batched and Serialised Item"})
-		if not item:
-			item = create_item("Batched and Serialised Item")
-			item.has_batch_no = 1
-			item.create_new_batch = 1
-			item.has_serial_no = 1
-			item.batch_number_series = "B-BATCH-.##"
-			item.serial_no_series = "S-.####"
-			item.save()
-		else:
-			item = dontmanage.get_doc("Item", {"item_name": "Batched and Serialised Item"})
-
-		se1 = make_stock_entry(
-			item_code=item.item_code, target="_Test Warehouse - _TC", qty=1, basic_rate=100
-		)
-		batch_no = se1.items[0].batch_no
-		serial_no1 = get_serial_nos(se1.items[0].serial_no)[0]
-
-		# Check Source (Origin) Document of Batch
-		self.assertEqual(dontmanage.db.get_value("Batch", batch_no, "reference_name"), se1.name)
-
-		se2 = make_stock_entry(
-			item_code=item.item_code,
-			target="_Test Warehouse - _TC",
-			qty=1,
-			basic_rate=100,
-			batch_no=batch_no,
-		)
-		serial_no2 = get_serial_nos(se2.items[0].serial_no)[0]
-
-		batch_qty = get_batch_qty(batch_no, "_Test Warehouse - _TC", item.item_code)
-		self.assertEqual(batch_qty, 2)
-
-		se2.cancel()
-
-		# Check decrease in Batch Qty
-		batch_qty = get_batch_qty(batch_no, "_Test Warehouse - _TC", item.item_code)
-		self.assertEqual(batch_qty, 1)
-
-		# Check if Serial No from Stock Entry 1 is intact
-		self.assertEqual(dontmanage.db.get_value("Serial No", serial_no1, "batch_no"), batch_no)
-		self.assertEqual(dontmanage.db.get_value("Serial No", serial_no1, "status"), "Active")
-
-		# Check if Serial No from Stock Entry 2 is Unlinked and Inactive
-		self.assertEqual(dontmanage.db.get_value("Serial No", serial_no2, "batch_no"), None)
-		self.assertEqual(dontmanage.db.get_value("Serial No", serial_no2, "status"), "Inactive")
+		self.assertEqual(dontmanage.db.get_value("Serial No", serial_no, "warehouse"), None)
 
 	def test_warehouse_company_validation(self):
 		company = dontmanage.db.get_value("Warehouse", "_Test Warehouse 2 - _TC1", "company")
@@ -851,24 +794,24 @@ class TestStockEntry(DontManageTestCase):
 		remove_user_permission("Company", "_Test Company 1", "test2@example.com")
 
 	def test_freeze_stocks(self):
-		dontmanage.db.set_value("Stock Settings", None, "stock_auth_role", "")
+		dontmanage.db.set_single_value("Stock Settings", "stock_auth_role", "")
 
 		# test freeze_stocks_upto
-		dontmanage.db.set_value("Stock Settings", None, "stock_frozen_upto", add_days(nowdate(), 5))
+		dontmanage.db.set_single_value("Stock Settings", "stock_frozen_upto", add_days(nowdate(), 5))
 		se = dontmanage.copy_doc(test_records[0]).insert()
 		self.assertRaises(StockFreezeError, se.submit)
 
-		dontmanage.db.set_value("Stock Settings", None, "stock_frozen_upto", "")
+		dontmanage.db.set_single_value("Stock Settings", "stock_frozen_upto", "")
 
 		# test freeze_stocks_upto_days
-		dontmanage.db.set_value("Stock Settings", None, "stock_frozen_upto_days", -1)
+		dontmanage.db.set_single_value("Stock Settings", "stock_frozen_upto_days", -1)
 		se = dontmanage.copy_doc(test_records[0])
 		se.set_posting_time = 1
 		se.posting_date = nowdate()
 		se.set_stock_entry_type()
 		se.insert()
 		self.assertRaises(StockFreezeError, se.submit)
-		dontmanage.db.set_value("Stock Settings", None, "stock_frozen_upto_days", 0)
+		dontmanage.db.set_single_value("Stock Settings", "stock_frozen_upto_days", 0)
 
 	def test_work_order(self):
 		from dontmanageerp.manufacturing.doctype.work_order.work_order import (
@@ -999,9 +942,45 @@ class TestStockEntry(DontManageTestCase):
 		stock_entry.insert()
 		self.assertTrue("_Test Variant Item-S" in [d.item_code for d in stock_entry.items])
 
+	def test_nagative_stock_for_batch(self):
+		item = make_item(
+			"_Test Batch Negative Item",
+			{
+				"has_batch_no": 1,
+				"create_new_batch": 1,
+				"batch_number_series": "B-BATCH-.##",
+				"is_stock_item": 1,
+			},
+		)
+
+		make_stock_entry(item_code=item.name, target="_Test Warehouse - _TC", qty=50, basic_rate=100)
+
+		ste = dontmanage.new_doc("Stock Entry")
+		ste.purpose = "Material Issue"
+		ste.company = "_Test Company"
+		for qty in [50, 20, 30]:
+			ste.append(
+				"items",
+				{
+					"item_code": item.name,
+					"s_warehouse": "_Test Warehouse - _TC",
+					"qty": qty,
+					"uom": item.stock_uom,
+					"stock_uom": item.stock_uom,
+					"conversion_factor": 1,
+					"transfer_qty": qty,
+				},
+			)
+
+		ste.set_stock_entry_type()
+		ste.insert()
+		make_stock_entry(item_code=item.name, target="_Test Warehouse - _TC", qty=50, basic_rate=100)
+
+		self.assertRaises(dontmanage.ValidationError, ste.submit)
+
 	def test_same_serial_nos_in_repack_or_manufacture_entries(self):
 		s1 = make_serialized_item(target_warehouse="_Test Warehouse - _TC")
-		serial_nos = s1.get("items")[0].serial_no
+		serial_nos = get_serial_nos_from_bundle(s1.get("items")[0].serial_and_batch_bundle)
 
 		s2 = make_stock_entry(
 			item_code="_Test Serialized Item With Series",
@@ -1013,6 +992,28 @@ class TestStockEntry(DontManageTestCase):
 			do_not_save=True,
 		)
 
+		dontmanage.flags.use_serial_and_batch_fields = True
+
+		cls_obj = SerialBatchCreation(
+			{
+				"type_of_transaction": "Inward",
+				"serial_and_batch_bundle": s2.items[0].serial_and_batch_bundle,
+				"item_code": "_Test Serialized Item",
+			}
+		)
+
+		cls_obj.duplicate_package()
+		bundle_id = cls_obj.serial_and_batch_bundle
+		doc = dontmanage.get_doc("Serial and Batch Bundle", bundle_id)
+		doc.db_set(
+			{
+				"item_code": "_Test Serialized Item",
+				"warehouse": "_Test Warehouse - _TC",
+			}
+		)
+
+		doc.load_from_db()
+
 		s2.append(
 			"items",
 			{
@@ -1023,90 +1024,13 @@ class TestStockEntry(DontManageTestCase):
 				"expense_account": "Stock Adjustment - _TC",
 				"conversion_factor": 1.0,
 				"cost_center": "_Test Cost Center - _TC",
-				"serial_no": serial_nos,
+				"serial_and_batch_bundle": bundle_id,
 			},
 		)
 
 		s2.submit()
 		s2.cancel()
-
-	def test_retain_sample(self):
-		from dontmanageerp.stock.doctype.batch.batch import get_batch_qty
-		from dontmanageerp.stock.doctype.warehouse.test_warehouse import create_warehouse
-
-		create_warehouse("Test Warehouse for Sample Retention")
-		dontmanage.db.set_value(
-			"Stock Settings",
-			None,
-			"sample_retention_warehouse",
-			"Test Warehouse for Sample Retention - _TC",
-		)
-
-		test_item_code = "Retain Sample Item"
-		if not dontmanage.db.exists("Item", test_item_code):
-			item = dontmanage.new_doc("Item")
-			item.item_code = test_item_code
-			item.item_name = "Retain Sample Item"
-			item.description = "Retain Sample Item"
-			item.item_group = "All Item Groups"
-			item.is_stock_item = 1
-			item.has_batch_no = 1
-			item.create_new_batch = 1
-			item.retain_sample = 1
-			item.sample_quantity = 4
-			item.save()
-
-		receipt_entry = dontmanage.new_doc("Stock Entry")
-		receipt_entry.company = "_Test Company"
-		receipt_entry.purpose = "Material Receipt"
-		receipt_entry.append(
-			"items",
-			{
-				"item_code": test_item_code,
-				"t_warehouse": "_Test Warehouse - _TC",
-				"qty": 40,
-				"basic_rate": 12,
-				"cost_center": "_Test Cost Center - _TC",
-				"sample_quantity": 4,
-			},
-		)
-		receipt_entry.set_stock_entry_type()
-		receipt_entry.insert()
-		receipt_entry.submit()
-
-		retention_data = move_sample_to_retention_warehouse(
-			receipt_entry.company, receipt_entry.get("items")
-		)
-		retention_entry = dontmanage.new_doc("Stock Entry")
-		retention_entry.company = retention_data.company
-		retention_entry.purpose = retention_data.purpose
-		retention_entry.append(
-			"items",
-			{
-				"item_code": test_item_code,
-				"t_warehouse": "Test Warehouse for Sample Retention - _TC",
-				"s_warehouse": "_Test Warehouse - _TC",
-				"qty": 4,
-				"basic_rate": 12,
-				"cost_center": "_Test Cost Center - _TC",
-				"batch_no": receipt_entry.get("items")[0].batch_no,
-			},
-		)
-		retention_entry.set_stock_entry_type()
-		retention_entry.insert()
-		retention_entry.submit()
-
-		qty_in_usable_warehouse = get_batch_qty(
-			receipt_entry.get("items")[0].batch_no, "_Test Warehouse - _TC", "_Test Item"
-		)
-		qty_in_retention_warehouse = get_batch_qty(
-			receipt_entry.get("items")[0].batch_no,
-			"Test Warehouse for Sample Retention - _TC",
-			"_Test Item",
-		)
-
-		self.assertEqual(qty_in_usable_warehouse, 36)
-		self.assertEqual(qty_in_retention_warehouse, 4)
+		dontmanage.flags.use_serial_and_batch_fields = False
 
 	def test_quality_check(self):
 		item_code = "_Test Item For QC"
@@ -1250,7 +1174,7 @@ class TestStockEntry(DontManageTestCase):
 		)
 
 	def test_conversion_factor_change(self):
-		dontmanage.db.set_value("Stock Settings", None, "allow_negative_stock", 1)
+		dontmanage.db.set_single_value("Stock Settings", "allow_negative_stock", 1)
 		repack_entry = dontmanage.copy_doc(test_records[3])
 		repack_entry.posting_date = nowdate()
 		repack_entry.posting_time = nowtime()
@@ -1400,7 +1324,7 @@ class TestStockEntry(DontManageTestCase):
 			posting_date="2021-09-01",
 			purpose="Material Receipt",
 		)
-		batch_nos.append(se1.items[0].batch_no)
+		batch_nos.append(get_batch_from_bundle(se1.items[0].serial_and_batch_bundle))
 		se2 = make_stock_entry(
 			item_code=item_code,
 			qty=2,
@@ -1408,9 +1332,9 @@ class TestStockEntry(DontManageTestCase):
 			posting_date="2021-09-03",
 			purpose="Material Receipt",
 		)
-		batch_nos.append(se2.items[0].batch_no)
+		batch_nos.append(get_batch_from_bundle(se2.items[0].serial_and_batch_bundle))
 
-		with self.assertRaises(NegativeStockError) as nse:
+		with self.assertRaises(dontmanage.ValidationError) as nse:
 			make_stock_entry(
 				item_code=item_code,
 				qty=1,
@@ -1431,8 +1355,6 @@ class TestStockEntry(DontManageTestCase):
 		"""
 		from dontmanageerp.stock.doctype.batch.test_batch import TestBatch
 
-		batch_nos = []
-
 		item_code = "_TestMultibatchFifo"
 		TestBatch.make_batch_item(item_code)
 		warehouse = "_Test Warehouse - _TC"
@@ -1449,18 +1371,25 @@ class TestStockEntry(DontManageTestCase):
 		)
 		receipt.save()
 		receipt.submit()
-		batch_nos.extend(row.batch_no for row in receipt.items)
+		receipt.load_from_db()
+
+		batches = dontmanage._dict(
+			{get_batch_from_bundle(row.serial_and_batch_bundle): row.qty for row in receipt.items}
+		)
+
 		self.assertEqual(receipt.value_difference, 30)
 
 		issue = make_stock_entry(
-			item_code=item_code, qty=1, from_warehouse=warehouse, purpose="Material Issue", do_not_save=True
+			item_code=item_code,
+			qty=2,
+			from_warehouse=warehouse,
+			purpose="Material Issue",
+			do_not_save=True,
+			batches=batches,
 		)
-		issue.append("items", dontmanage.copy_doc(issue.items[0], ignore_no_copy=False))
-		for row, batch_no in zip(issue.items, batch_nos):
-			row.batch_no = batch_no
+
 		issue.save()
 		issue.submit()
-
 		issue.reload()  # reload because reposting current voucher updates rate
 		self.assertEqual(issue.value_difference, -30)
 
@@ -1505,6 +1434,7 @@ class TestStockEntry(DontManageTestCase):
 		self.assertEqual(se.items[0].item_name, item.item_name)
 		self.assertEqual(se.items[0].stock_uom, item.stock_uom)
 
+	@change_settings("Stock Reposting Settings", {"item_based_reposting": 0})
 	def test_reposting_for_depedent_warehouse(self):
 		from dontmanageerp.stock.doctype.repost_item_valuation.repost_item_valuation import repost_sl_entries
 		from dontmanageerp.stock.doctype.warehouse.test_warehouse import create_warehouse
@@ -1657,6 +1587,7 @@ class TestStockEntry(DontManageTestCase):
 			qty=4,
 			to_warehouse="_Test Warehouse - _TC",
 			batch_no=batch.name,
+			use_serial_batch_fields=1,
 			do_not_save=True,
 		)
 
@@ -1671,24 +1602,22 @@ class TestStockEntry(DontManageTestCase):
 		item_code = "Test Negative Item - 001"
 		item_doc = create_item(item_code=item_code, is_stock_item=1, valuation_rate=10)
 
-		make_stock_entry(
+		se1 = make_stock_entry(
 			item_code=item_code,
 			posting_date=add_days(today(), -3),
 			posting_time="00:00:00",
-			purpose="Material Receipt",
+			target="_Test Warehouse - _TC",
 			qty=10,
 			to_warehouse="_Test Warehouse - _TC",
-			do_not_save=True,
 		)
 
-		make_stock_entry(
+		se2 = make_stock_entry(
 			item_code=item_code,
 			posting_date=today(),
 			posting_time="00:00:00",
-			purpose="Material Receipt",
+			source="_Test Warehouse - _TC",
 			qty=8,
 			from_warehouse="_Test Warehouse - _TC",
-			do_not_save=True,
 		)
 
 		sr_doc = create_stock_reconciliation(
@@ -1704,6 +1633,162 @@ class TestStockEntry(DontManageTestCase):
 
 		self.assertRaises(dontmanage.ValidationError, sr_doc.submit)
 
+	def test_enqueue_action(self):
+		dontmanage.flags.in_test = False
+		item_code = "Test Enqueue Item - 001"
+		create_item(item_code=item_code, is_stock_item=1, valuation_rate=10)
+
+		doc = make_stock_entry(
+			item_code=item_code,
+			posting_date=add_to_date(today(), months=-7),
+			posting_time="00:00:00",
+			purpose="Material Receipt",
+			qty=10,
+			to_warehouse="_Test Warehouse - _TC",
+			do_not_submit=True,
+		)
+
+		self.assertTrue(doc.is_enqueue_action())
+
+		doc = make_stock_entry(
+			item_code=item_code,
+			posting_date=today(),
+			posting_time="00:00:00",
+			purpose="Material Receipt",
+			qty=10,
+			to_warehouse="_Test Warehouse - _TC",
+			do_not_submit=True,
+		)
+
+		self.assertFalse(doc.is_enqueue_action())
+		dontmanage.flags.in_test = True
+
+	def test_negative_batch(self):
+		item_code = "Test Negative Batch Item - 001"
+		make_item(
+			item_code,
+			{"has_batch_no": 1, "create_new_batch": 1, "batch_naming_series": "Test-BCH-NNS.#####"},
+		)
+
+		se1 = make_stock_entry(
+			item_code=item_code,
+			purpose="Material Receipt",
+			qty=100,
+			target="_Test Warehouse - _TC",
+		)
+
+		se1.reload()
+
+		batch_no = get_batch_from_bundle(se1.items[0].serial_and_batch_bundle)
+
+		se2 = make_stock_entry(
+			item_code=item_code,
+			purpose="Material Issue",
+			batch_no=batch_no,
+			qty=10,
+			source="_Test Warehouse - _TC",
+		)
+
+		se2.reload()
+
+		se3 = make_stock_entry(
+			item_code=item_code,
+			purpose="Material Receipt",
+			qty=100,
+			target="_Test Warehouse - _TC",
+		)
+
+		se3.reload()
+
+		self.assertRaises(dontmanage.ValidationError, se1.cancel)
+
+	def test_auto_reorder_level(self):
+		from dontmanageerp.stock.reorder_item import reorder_item
+
+		item_doc = make_item(
+			"Test Auto Reorder Item - 001",
+			properties={"stock_uom": "Kg", "purchase_uom": "Nos", "is_stock_item": 1},
+			uoms=[{"uom": "Nos", "conversion_factor": 5}],
+		)
+
+		if not dontmanage.db.exists("Item Reorder", {"parent": item_doc.name}):
+			item_doc.append(
+				"reorder_levels",
+				{
+					"warehouse_reorder_level": 0,
+					"warehouse_reorder_qty": 10,
+					"warehouse": "_Test Warehouse - _TC",
+					"material_request_type": "Purchase",
+				},
+			)
+
+		item_doc.save(ignore_permissions=True)
+
+		dontmanage.db.set_single_value("Stock Settings", "auto_indent", 1)
+
+		mr_list = reorder_item()
+
+		dontmanage.db.set_single_value("Stock Settings", "auto_indent", 0)
+		mrs = dontmanage.get_all(
+			"Material Request Item",
+			fields=["qty", "stock_uom", "stock_qty"],
+			filters={"item_code": item_doc.name, "uom": "Nos"},
+		)
+
+		for mri in mrs:
+			self.assertEqual(mri.stock_uom, "Kg")
+			self.assertEqual(mri.stock_qty, 10)
+			self.assertEqual(mri.qty, 2)
+
+		for mr in mr_list:
+			mr.cancel()
+			mr.delete()
+
+	def test_use_serial_and_batch_fields(self):
+		item = make_item(
+			"Test Use Serial and Batch Item SN Item",
+			{"has_serial_no": 1, "is_stock_item": 1},
+		)
+
+		serial_nos = [
+			"Test Use Serial and Batch Item SN Item - SN 001",
+			"Test Use Serial and Batch Item SN Item - SN 002",
+		]
+
+		se = make_stock_entry(
+			item_code=item.name,
+			qty=2,
+			to_warehouse="_Test Warehouse - _TC",
+			use_serial_batch_fields=1,
+			serial_no="\n".join(serial_nos),
+		)
+
+		self.assertTrue(se.items[0].use_serial_batch_fields)
+		self.assertTrue(se.items[0].serial_no)
+		self.assertTrue(se.items[0].serial_and_batch_bundle)
+
+		for serial_no in serial_nos:
+			self.assertTrue(dontmanage.db.exists("Serial No", serial_no))
+			self.assertEqual(dontmanage.db.get_value("Serial No", serial_no, "status"), "Active")
+
+		se1 = make_stock_entry(
+			item_code=item.name,
+			qty=2,
+			from_warehouse="_Test Warehouse - _TC",
+			use_serial_batch_fields=1,
+			serial_no="\n".join(serial_nos),
+		)
+
+		se1.reload()
+
+		self.assertTrue(se1.items[0].use_serial_batch_fields)
+		self.assertTrue(se1.items[0].serial_no)
+		self.assertTrue(se1.items[0].serial_and_batch_bundle)
+
+		for serial_no in serial_nos:
+			self.assertTrue(dontmanage.db.exists("Serial No", serial_no))
+			self.assertEqual(dontmanage.db.get_value("Serial No", serial_no, "status"), "Delivered")
+
 
 def make_serialized_item(**args):
 	args = dontmanage._dict(args)
@@ -1712,10 +1797,31 @@ def make_serialized_item(**args):
 	if args.company:
 		se.company = args.company
 
+	if args.target_warehouse:
+		se.get("items")[0].t_warehouse = args.target_warehouse
+
 	se.get("items")[0].item_code = args.item_code or "_Test Serialized Item With Series"
 
 	if args.serial_no:
-		se.get("items")[0].serial_no = args.serial_no
+		serial_nos = args.serial_no
+		if isinstance(serial_nos, str):
+			serial_nos = [serial_nos]
+
+		se.get("items")[0].serial_and_batch_bundle = make_serial_batch_bundle(
+			dontmanage._dict(
+				{
+					"item_code": se.get("items")[0].item_code,
+					"warehouse": se.get("items")[0].t_warehouse,
+					"company": se.company,
+					"qty": 2,
+					"voucher_type": "Stock Entry",
+					"serial_nos": serial_nos,
+					"posting_date": today(),
+					"posting_time": nowtime(),
+					"do_not_submit": True,
+				}
+			)
+		).name
 
 	if args.cost_center:
 		se.get("items")[0].cost_center = args.cost_center
@@ -1726,12 +1832,11 @@ def make_serialized_item(**args):
 	se.get("items")[0].qty = 2
 	se.get("items")[0].transfer_qty = 2
 
-	if args.target_warehouse:
-		se.get("items")[0].t_warehouse = args.target_warehouse
-
 	se.set_stock_entry_type()
 	se.insert()
 	se.submit()
+
+	se.load_from_db()
 	return se
 
 

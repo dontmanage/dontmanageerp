@@ -8,4 +8,4 @@ def execute():
 	discount_account = data and int(data[0][0]) or 0
 	if discount_account:
 		for doctype in ["Buying Settings", "Selling Settings"]:
-			dontmanage.db.set_value(doctype, doctype, "enable_discount_accounting", 1, update_modified=False)
+			dontmanage.db.set_single_value(doctype, "enable_discount_accounting", 1, update_modified=False)

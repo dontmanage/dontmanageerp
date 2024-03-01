@@ -41,7 +41,7 @@ def execute():
 	for card in cards:
 		dontmanage.delete_doc("Number Card", card, ignore_missing=True, force=True)
 
-	titles = ["Lab Test", "Prescription", "Patient Appointment"]
+	titles = ["Lab Test", "Prescription", "Patient Appointment", "Patient"]
 	items = dontmanage.get_all("Portal Menu Item", filters=[["title", "in", titles]], pluck="name")
 	for item in items:
 		dontmanage.delete_doc("Portal Menu Item", item, ignore_missing=True, force=True)

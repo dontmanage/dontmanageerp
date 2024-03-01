@@ -1,13 +1,16 @@
 // Copyright (c) 2015, DontManage and Contributors
 // License: GNU General Public License v3. See license.txt
 
-{% include 'dontmanageerp/selling/sales_common.js' %};
-
 cur_frm.add_fetch('customer', 'tax_id', 'tax_id');
 
 dontmanage.provide("dontmanageerp.stock");
 dontmanage.provide("dontmanageerp.stock.delivery_note");
 dontmanage.provide("dontmanageerp.accounts.dimensions");
+
+dontmanageerp.accounts.taxes.setup_tax_filters("Sales Taxes and Charges");
+dontmanageerp.accounts.taxes.setup_tax_validations("Delivery Note");
+dontmanageerp.sales_common.setup_selling_controller();
+
 
 dontmanage.ui.form.on("Delivery Note", {
 	setup: function(frm) {
@@ -27,15 +30,6 @@ dontmanage.ui.form.on("Delivery Note", {
 			return dontmanageerp.queries.warehouse(frm.doc);
 		});
 		dontmanageerp.queries.setup_warehouse_query(frm);
-
-		frm.set_query('project', function(doc) {
-			return {
-				query: "dontmanageerp.controllers.queries.get_project_name",
-				filters: {
-					'customer': doc.customer
-				}
-			}
-		})
 
 		frm.set_query('transporter', function() {
 			return {
@@ -147,6 +141,9 @@ dontmanageerp.stock.DeliveryNoteController = class DeliveryNoteController extend
 						}
 						dontmanageerp.utils.map_current_doc({
 							method: "dontmanageerp.selling.doctype.sales_order.sales_order.make_delivery_note",
+							args: {
+								for_reserved_stock: 1
+							},
 							source_doctype: "Sales Order",
 							target: me.frm,
 							setters: {
@@ -185,17 +182,23 @@ dontmanageerp.stock.DeliveryNoteController = class DeliveryNoteController extend
 			}
 
 			if(doc.docstatus==0 && !doc.__islocal) {
-				this.frm.add_custom_button(__('Packing Slip'), function() {
-					dontmanage.model.open_mapped_doc({
-						method: "dontmanageerp.stock.doctype.delivery_note.delivery_note.make_packing_slip",
-						frm: me.frm
-					}) }, __('Create'));
+				if (doc.__onload && doc.__onload.has_unpacked_items) {
+					this.frm.add_custom_button(__('Packing Slip'), function() {
+						dontmanage.model.open_mapped_doc({
+							method: "dontmanageerp.stock.doctype.delivery_note.delivery_note.make_packing_slip",
+							frm: me.frm
+						}) }, __('Create')
+					);
+				}
 			}
 
 			if (!doc.__islocal && doc.docstatus==1) {
 				this.frm.page.set_inner_btn_group_as_primary(__('Create'));
 			}
 		}
+
+		dontmanageerp.accounts.ledger_preview.show_accounting_ledger_preview(this.frm);
+		dontmanageerp.accounts.ledger_preview.show_stock_ledger_preview(this.frm);
 
 		if (doc.docstatus > 0) {
 			this.show_stock_ledger();
@@ -226,12 +229,6 @@ dontmanageerp.stock.DeliveryNoteController = class DeliveryNoteController extend
 				__("Status"))
 		}
 		dontmanageerp.stock.delivery_note.set_print_hide(doc, dt, dn);
-
-		if(doc.docstatus==1 && !doc.is_return && !doc.auto_repeat) {
-			cur_frm.add_custom_button(__('Subscription'), function() {
-				dontmanageerp.utils.make_subscription(doc.doctype, doc.name)
-			}, __('Create'))
-		}
 	}
 
 	make_shipment() {

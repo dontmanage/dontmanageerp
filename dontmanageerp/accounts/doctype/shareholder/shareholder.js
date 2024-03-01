@@ -3,8 +3,6 @@
 
 dontmanage.ui.form.on('Shareholder', {
 	refresh: function(frm) {
-		dontmanage.dynamic_link = { doc: frm.doc, fieldname: 'name', doctype: 'Shareholder' };
-
 		frm.toggle_display(['contact_html'], !frm.doc.__islocal);
 
 		if (frm.doc.__islocal) {

@@ -5,7 +5,7 @@
 from unittest.mock import MagicMock, call
 
 import dontmanage
-from dontmanage.tests.utils import DontManageTestCase
+from dontmanage.tests.utils import DontManageTestCase, change_settings
 from dontmanage.utils import add_days, add_to_date, now, nowdate, today
 
 from dontmanageerp.accounts.doctype.sales_invoice.test_sales_invoice import create_sales_invoice
@@ -200,6 +200,7 @@ class TestRepostItemValuation(DontManageTestCase, StockTestMixin):
 
 		riv.set_status("Skipped")
 
+	@change_settings("Stock Reposting Settings", {"item_based_reposting": 0})
 	def test_prevention_of_cancelled_transaction_riv(self):
 		dontmanage.flags.dont_execute_stock_reposts = True
 
@@ -376,3 +377,85 @@ class TestRepostItemValuation(DontManageTestCase, StockTestMixin):
 
 		accounts_settings.acc_frozen_upto = ""
 		accounts_settings.save()
+
+	@change_settings("Stock Reposting Settings", {"item_based_reposting": 0})
+	def test_create_repost_entry_for_cancelled_document(self):
+		pr = make_purchase_receipt(
+			company="_Test Company with perpetual inventory",
+			warehouse="Stores - TCP1",
+			get_multiple_items=True,
+		)
+
+		self.assertTrue(pr.docstatus == 1)
+		self.assertFalse(dontmanage.db.exists("Repost Item Valuation", {"voucher_no": pr.name}))
+
+		pr.load_from_db()
+
+		pr.cancel()
+		self.assertTrue(pr.docstatus == 2)
+		self.assertTrue(dontmanage.db.exists("Repost Item Valuation", {"voucher_no": pr.name}))
+
+	def test_repost_item_valuation_for_closing_stock_balance(self):
+		from dontmanageerp.stock.doctype.closing_stock_balance.closing_stock_balance import (
+			prepare_closing_stock_balance,
+		)
+
+		doc = dontmanage.new_doc("Closing Stock Balance")
+		doc.company = "_Test Company"
+		doc.from_date = today()
+		doc.to_date = today()
+		doc.submit()
+
+		prepare_closing_stock_balance(doc.name)
+		doc.load_from_db()
+		self.assertEqual(doc.docstatus, 1)
+		self.assertEqual(doc.status, "Completed")
+
+		riv = dontmanage.new_doc("Repost Item Valuation")
+		riv.update(
+			{
+				"item_code": "_Test Item",
+				"warehouse": "_Test Warehouse - _TC",
+				"based_on": "Item and Warehouse",
+				"posting_date": today(),
+				"posting_time": "00:01:00",
+			}
+		)
+
+		self.assertRaises(dontmanage.ValidationError, riv.save)
+		doc.cancel()
+
+	def test_remove_attached_file(self):
+		item_code = make_item("_Test Remove Attached File Item", properties={"is_stock_item": 1})
+
+		make_purchase_receipt(
+			item_code=item_code,
+			qty=1,
+			rate=100,
+		)
+
+		pr1 = make_purchase_receipt(
+			item_code=item_code,
+			qty=1,
+			rate=100,
+			posting_date=add_days(today(), days=-1),
+		)
+
+		if docname := dontmanage.db.exists("Repost Item Valuation", {"voucher_no": pr1.name}):
+			self.assertFalse(
+				dontmanage.db.get_value(
+					"File",
+					{"attached_to_doctype": "Repost Item Valuation", "attached_to_name": docname},
+					"name",
+				)
+			)
+		else:
+			repost_entries = create_item_wise_repost_entries(pr1.doctype, pr1.name)
+			for entry in repost_entries:
+				self.assertFalse(
+					dontmanage.db.get_value(
+						"File",
+						{"attached_to_doctype": "Repost Item Valuation", "attached_to_name": entry.name},
+						"name",
+					)
+				)

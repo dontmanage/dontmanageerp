@@ -9,6 +9,7 @@ dontmanage.ui.form.on('Process Statement Of Accounts', {
 	refresh: function(frm){
 		if(!frm.doc.__islocal) {
 			frm.add_custom_button(__('Send Emails'), function(){
+				if (frm.is_dirty()) dontmanage.throw(__("Please save before proceeding."))
 				dontmanage.call({
 					method: "dontmanageerp.accounts.doctype.process_statement_of_accounts.process_statement_of_accounts.send_emails",
 					args: {
@@ -25,7 +26,8 @@ dontmanage.ui.form.on('Process Statement Of Accounts', {
 				});
 			});
 			frm.add_custom_button(__('Download'), function(){
-				var url = dontmanage.urllib.get_full_url(
+				if (frm.is_dirty()) dontmanage.throw(__("Please save before proceeding."))
+				let url = dontmanage.urllib.get_full_url(
 					'/api/method/dontmanageerp.accounts.doctype.process_statement_of_accounts.process_statement_of_accounts.download_statements?'
 					+ 'document_name='+encodeURIComponent(frm.doc.name))
 				$.ajax({
@@ -62,6 +64,20 @@ dontmanage.ui.form.on('Process Statement Of Accounts', {
 			frm.set_value('from_date', dontmanage.datetime.add_months(dontmanage.datetime.get_today(), -1));
 			frm.set_value('to_date', dontmanage.datetime.get_today());
 		}
+	},
+	report: function(frm){
+		let filters = {
+			'company': frm.doc.company,
+		}
+		if(frm.doc.report == 'Accounts Receivable'){
+			filters['account_type'] = 'Receivable';
+		}
+		frm.set_query("account", function() {
+			return {
+				filters: filters
+			};
+		});
+
 	},
 	customer_collection: function(frm){
 		frm.set_value('collection_name', '');

@@ -72,10 +72,27 @@ dontmanage.query_reports["Accounts Receivable Summary"] = {
 			}
 		},
 		{
-			"fieldname":"customer",
-			"label": __("Customer"),
-			"fieldtype": "Link",
-			"options": "Customer"
+			"fieldname":"party_type",
+			"label": __("Party Type"),
+			"fieldtype": "Autocomplete",
+			options: get_party_type_options(),
+			on_change: function() {
+				dontmanage.query_report.set_filter_value('party', "");
+				dontmanage.query_report.toggle_filter_display('customer_group', dontmanage.query_report.get_filter_value('party_type') !== "Customer");
+			}
+		},
+		{
+			"fieldname":"party",
+			"label": __("Party"),
+			"fieldtype": "MultiSelectList",
+			get_data: function(txt) {
+				if (!dontmanage.query_report.filters) return;
+
+				let party_type = dontmanage.query_report.get_filter_value('party_type');
+				if (!party_type) return;
+
+				return dontmanage.db.get_link_options(party_type, txt);
+			},
 		},
 		{
 			"fieldname":"customer_group",
@@ -122,6 +139,11 @@ dontmanage.query_reports["Accounts Receivable Summary"] = {
 			"label": __("Show GL Balance"),
 			"fieldtype": "Check",
 		},
+		{
+			"fieldname": "for_revaluation_journals",
+			"label": __("Revaluation Journals"),
+			"fieldtype": "Check",
+		}
 	],
 
 	onload: function(report) {
@@ -133,3 +155,15 @@ dontmanage.query_reports["Accounts Receivable Summary"] = {
 }
 
 dontmanageerp.utils.add_dimensions('Accounts Receivable Summary', 9);
+
+function get_party_type_options() {
+	let options = [];
+	dontmanage.db.get_list(
+		"Party Type", {filters:{"account_type": "Receivable"}, fields:['name']}
+	).then((res) => {
+		res.forEach((party_type) => {
+			options.push(party_type.name);
+		});
+	});
+	return options;
+}
