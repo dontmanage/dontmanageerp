@@ -58,9 +58,20 @@
   "tax_tab",
   "taxation_section",
   "tax_id",
+  "customer_billing_export_job",
+  "customer_billing_proforma_billing_mistch",
+  "customer_billing_export_invc_dlr",
   "column_break_21",
   "tax_category",
   "tax_withholding_category",
+  "customer_billing_mandatory_pi",
+  "customer_billing_exlude_flat_strip",
+  "credit_settings_section",
+  "customer_job_credit_limit",
+  "column_break_cjmp",
+  "customer_job_current_credit",
+  "column_break_kzrs",
+  "customer_job_due_days",
   "accounting_tab",
   "credit_limit_section",
   "payment_terms",
@@ -84,7 +95,52 @@
   "is_frozen",
   "disabled",
   "portal_users_tab",
-  "portal_users"
+  "portal_users",
+  "job_settings_tab",
+  "multiple_qc",
+  "plate_thickness_default_options",
+  "job_nature_default_options",
+  "column_break_wxdx",
+  "max_qa_iterations",
+  "job_type_default_options",
+  "custom_settings_section",
+  "customer_po",
+  "customer_sap_support",
+  "customer_qc_direct_production",
+  "customer_test_cert_tds",
+  "customer_colour_printout",
+  "customer_color_printout_area",
+  "column_break_ldbr",
+  "customer_predefined_po",
+  "customer_state",
+  "customer_process",
+  "customer_predefined_length_breadth",
+  "customer_color_printout_foc",
+  "column_break_weof",
+  "customer_prod_loc",
+  "customer_freight_charge_check",
+  "customer_freight_charge_amount",
+  "customer_job_printout",
+  "customer_only_one_job_billing",
+  "customer_colour_printout_mandatory",
+  "prepress_automation_default_values_section",
+  "customer_prepress_job_type",
+  "customer_prepress_job_proofing",
+  "column_break_nkoe",
+  "customer_press_job_complexity",
+  "customer_prepress_job_fasttrack",
+  "column_break_fhfp",
+  "customer_prepress_job_range",
+  "section_break_mxkb",
+  "customer_predefined_po_list",
+  "customer_rate_values_section",
+  "customer_rate_values_excel",
+  "milestone_and_discount_section",
+  "customer_milestone_and_discount",
+  "spot_uv_rates_section",
+  "customer_spot_uv_rates",
+  "product_rates_section",
+  "customer_product_rates"
  ],
  "fields": [
   {
@@ -539,7 +595,7 @@
   {
    "fieldname": "tax_tab",
    "fieldtype": "Tab Break",
-   "label": "Tax"
+   "label": "Billing"
   },
   {
    "collapsible": 1,
@@ -570,6 +626,323 @@
   {
    "fieldname": "column_break_nwor",
    "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "multiple_qc",
+   "fieldtype": "Check",
+   "label": "Multiple QC Enabled"
+  },
+  {
+   "fieldname": "max_qa_iterations",
+   "fieldtype": "Int",
+   "label": "Max QC Iterations",
+   "non_negative": 1
+  },
+  {
+   "fieldname": "job_settings_tab",
+   "fieldtype": "Tab Break",
+   "label": "Job Settings"
+  },
+  {
+   "fieldname": "column_break_wxdx",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "plate_thickness_default_options",
+   "fieldtype": "Table MultiSelect",
+   "label": "Plate Thickness Default Options",
+   "options": "Plate Thickness Table"
+  },
+  {
+   "fieldname": "job_type_default_options",
+   "fieldtype": "Table MultiSelect",
+   "label": "Job Type Default Options",
+   "options": "Job Type Table"
+  },
+  {
+   "fieldname": "job_nature_default_options",
+   "fieldtype": "Table MultiSelect",
+   "label": "Job Nature Default Options",
+   "options": "Job Nature Table"
+  },
+  {
+   "fieldname": "custom_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Custom Settings"
+  },
+  {
+   "fieldname": "customer_po",
+   "fieldtype": "Select",
+   "label": "P O",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_sap_support",
+   "fieldtype": "Select",
+   "label": "SAP Support",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_qc_direct_production",
+   "fieldtype": "Select",
+   "label": "QC Direct Production Jobs",
+   "options": "Disabled\nEnabled"
+  },
+  {
+   "fieldname": "customer_test_cert_tds",
+   "fieldtype": "Select",
+   "label": "Test Certificate and TDS",
+   "options": "Disabled\nEnabled"
+  },
+  {
+   "fieldname": "customer_colour_printout",
+   "fieldtype": "Select",
+   "label": "Color Printout",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_color_printout_area",
+   "fieldtype": "Select",
+   "label": "Color Printout Area",
+   "options": "A4"
+  },
+  {
+   "fieldname": "column_break_ldbr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customer_predefined_po",
+   "fieldtype": "Select",
+   "label": "Predefined P O",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_state",
+   "fieldtype": "Data",
+   "label": "State"
+  },
+  {
+   "fieldname": "customer_process",
+   "fieldtype": "Select",
+   "label": "Process",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_predefined_length_breadth",
+   "fieldtype": "Select",
+   "label": "Predefined Length & Breadth as 1",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_color_printout_foc",
+   "fieldtype": "Select",
+   "label": "Color Printout FOC",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "column_break_weof",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customer_prod_loc",
+   "fieldtype": "Link",
+   "label": "Production Location",
+   "options": "Job Production Locations Master"
+  },
+  {
+   "default": "0",
+   "fieldname": "customer_freight_charge_check",
+   "fieldtype": "Check",
+   "label": "Freight Charge",
+   "options": "Yes\nNo"
+  },
+  {
+   "depends_on": "eval:doc.customer_freight_charge_check;",
+   "fieldname": "customer_freight_charge_amount",
+   "fieldtype": "Float",
+   "label": "Freight Charge Amount",
+   "non_negative": 1,
+   "precision": "2"
+  },
+  {
+   "fieldname": "customer_job_printout",
+   "fieldtype": "Select",
+   "label": "Printout",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_only_one_job_billing",
+   "fieldtype": "Select",
+   "label": "Only One Job Billing at a Time",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_colour_printout_mandatory",
+   "fieldtype": "Select",
+   "label": "Color Printout Mandatory",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "prepress_automation_default_values_section",
+   "fieldtype": "Section Break",
+   "label": "Prepress Automation Default Values"
+  },
+  {
+   "fieldname": "customer_prepress_job_type",
+   "fieldtype": "Link",
+   "label": "Job Category",
+   "options": "Job Type"
+  },
+  {
+   "fieldname": "customer_prepress_job_proofing",
+   "fieldtype": "Select",
+   "label": "Job Proofing",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "column_break_nkoe",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customer_press_job_complexity",
+   "fieldtype": "Link",
+   "label": "Job Complexity",
+   "options": "Job Complexity Master"
+  },
+  {
+   "fieldname": "customer_prepress_job_fasttrack",
+   "fieldtype": "Select",
+   "label": "Job Fast Track",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "column_break_fhfp",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customer_prepress_job_range",
+   "fieldtype": "Select",
+   "label": "Job Range",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_billing_export_job",
+   "fieldtype": "Select",
+   "label": "Export Job",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_billing_mandatory_pi",
+   "fieldtype": "Select",
+   "label": "Mandatory PI",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_billing_export_invc_dlr",
+   "fieldtype": "Select",
+   "label": "Export Invoice in Dollar Only",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "customer_billing_proforma_billing_mistch",
+   "fieldtype": "Select",
+   "label": "Proforma - Billing size mismatch update ",
+   "options": "Actual Size to Proforma\nProforma to Actual Size"
+  },
+  {
+   "fieldname": "customer_billing_exlude_flat_strip",
+   "fieldtype": "Select",
+   "label": "Exclude Flat Strip and Carrier film ",
+   "options": "Yes\nNo"
+  },
+  {
+   "fieldname": "section_break_mxkb",
+   "fieldtype": "Section Break",
+   "label": "Predefined PO"
+  },
+  {
+   "fieldname": "customer_predefined_po_list",
+   "fieldtype": "Table",
+   "label": "Predefined PO ",
+   "options": "Customer Predefined PO Table"
+  },
+  {
+   "fieldname": "customer_rate_values_section",
+   "fieldtype": "Section Break",
+   "label": "Customer Rate Values"
+  },
+  {
+   "fieldname": "customer_rate_values_excel",
+   "fieldtype": "Table",
+   "label": "Rate Value For Excel",
+   "options": "Customer Rate Values Table"
+  },
+  {
+   "fieldname": "milestone_and_discount_section",
+   "fieldtype": "Section Break",
+   "label": "Milestone and Discount"
+  },
+  {
+   "fieldname": "customer_milestone_and_discount",
+   "fieldtype": "Table",
+   "label": "Milestone and Discounts",
+   "options": "Customer Milestone Discounts Table"
+  },
+  {
+   "fieldname": "spot_uv_rates_section",
+   "fieldtype": "Section Break",
+   "label": "Spot UV Rates"
+  },
+  {
+   "fieldname": "customer_spot_uv_rates",
+   "fieldtype": "Table",
+   "label": "Spot UV Rates",
+   "options": "Customer Spot UV Rate Table"
+  },
+  {
+   "fieldname": "product_rates_section",
+   "fieldtype": "Section Break",
+   "label": "Product Rates"
+  },
+  {
+   "fieldname": "customer_product_rates",
+   "fieldtype": "Table",
+   "label": "Product Rates",
+   "options": "Customer Product Rate Table"
+  },
+  {
+   "fieldname": "credit_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Credit Settings"
+  },
+  {
+   "fieldname": "customer_job_credit_limit",
+   "fieldtype": "Float",
+   "label": "Credit Limit",
+   "non_negative": 1,
+   "precision": "2"
+  },
+  {
+   "fieldname": "column_break_cjmp",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customer_job_current_credit",
+   "fieldtype": "Float",
+   "label": "Current Credit",
+   "non_negative": 1,
+   "precision": "2"
+  },
+  {
+   "fieldname": "column_break_kzrs",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customer_job_due_days",
+   "fieldtype": "Int",
+   "label": "Due Days (in days)",
+   "non_negative": 1
   }
  ],
  "icon": "fa fa-user",
@@ -583,7 +956,7 @@
    "link_fieldname": "party"
   }
  ],
- "modified": "2023-12-28 13:15:36.298369",
+ "modified": "2024-05-25 20:02:53.125824",
  "modified_by": "Administrator",
  "module": "Selling",
  "name": "Customer",

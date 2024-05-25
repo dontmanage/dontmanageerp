@@ -31,27 +31,65 @@ class Customer(TransactionBase):
 
 	if TYPE_CHECKING:
 		from dontmanage.types import DF
-
-		from dontmanageerp.accounts.doctype.allowed_to_transact_with.allowed_to_transact_with import (
-			AllowedToTransactWith,
-		)
+		from dontmanageerp.accounts.doctype.allowed_to_transact_with.allowed_to_transact_with import AllowedToTransactWith
 		from dontmanageerp.accounts.doctype.party_account.party_account import PartyAccount
-		from dontmanageerp.selling.doctype.customer_credit_limit.customer_credit_limit import (
-			CustomerCreditLimit,
-		)
+		from dontmanageerp.selling.doctype.customer_credit_limit.customer_credit_limit import CustomerCreditLimit
 		from dontmanageerp.selling.doctype.sales_team.sales_team import SalesTeam
 		from dontmanageerp.utilities.doctype.portal_user.portal_user import PortalUser
+		from veepee_erp.veepee_erp.doctype.customer_milestone_discounts_table.customer_milestone_discounts_table import CustomerMilestoneDiscountsTable
+		from veepee_erp.veepee_erp.doctype.customer_predefined_po_table.customer_predefined_po_table import CustomerPredefinedPOTable
+		from veepee_erp.veepee_erp.doctype.customer_product_rate_table.customer_product_rate_table import CustomerProductRateTable
+		from veepee_erp.veepee_erp.doctype.customer_rate_values_table.customer_rate_values_table import CustomerRateValuesTable
+		from veepee_erp.veepee_erp.doctype.customer_spot_uv_rate_table.customer_spot_uv_rate_table import CustomerSpotUVRateTable
+		from veepee_erp.veepee_erp.doctype.job_nature_table.job_nature_table import JobNatureTable
+		from veepee_erp.veepee_erp.doctype.job_type_table.job_type_table import JobTypeTable
+		from veepee_erp.veepee_erp.doctype.plate_thickness_table.plate_thickness_table import PlateThicknessTable
 
 		account_manager: DF.Link | None
 		accounts: DF.Table[PartyAccount]
 		companies: DF.Table[AllowedToTransactWith]
 		credit_limits: DF.Table[CustomerCreditLimit]
+		customer_billing_exlude_flat_strip: DF.Literal["Yes", "No"]
+		customer_billing_export_invc_dlr: DF.Literal["Yes", "No"]
+		customer_billing_export_job: DF.Literal["Yes", "No"]
+		customer_billing_mandatory_pi: DF.Literal["Yes", "No"]
+		customer_billing_proforma_billing_mistch: DF.Literal["Actual Size to Proforma", "Proforma to Actual Size"]
+		customer_color_printout_area: DF.Literal["A4"]
+		customer_color_printout_foc: DF.Literal["Yes", "No"]
+		customer_colour_printout: DF.Literal["Yes", "No"]
+		customer_colour_printout_mandatory: DF.Literal["Yes", "No"]
 		customer_details: DF.Text | None
+		customer_freight_charge_amount: DF.Float
+		customer_freight_charge_check: DF.Check
 		customer_group: DF.Link | None
+		customer_job_credit_limit: DF.Float
+		customer_job_current_credit: DF.Float
+		customer_job_due_days: DF.Int
+		customer_job_printout: DF.Literal["Yes", "No"]
+		customer_milestone_and_discount: DF.Table[CustomerMilestoneDiscountsTable]
 		customer_name: DF.Data
+		customer_only_one_job_billing: DF.Literal["Yes", "No"]
+		customer_po: DF.Literal["Yes", "No"]
 		customer_pos_id: DF.Data | None
+		customer_predefined_length_breadth: DF.Literal["Yes", "No"]
+		customer_predefined_po: DF.Literal["Yes", "No"]
+		customer_predefined_po_list: DF.Table[CustomerPredefinedPOTable]
+		customer_prepress_job_fasttrack: DF.Literal["Yes", "No"]
+		customer_prepress_job_proofing: DF.Literal["Yes", "No"]
+		customer_prepress_job_range: DF.Literal["Yes", "No"]
+		customer_prepress_job_type: DF.Link | None
+		customer_press_job_complexity: DF.Link | None
 		customer_primary_address: DF.Link | None
 		customer_primary_contact: DF.Link | None
+		customer_process: DF.Literal["Yes", "No"]
+		customer_prod_loc: DF.Link | None
+		customer_product_rates: DF.Table[CustomerProductRateTable]
+		customer_qc_direct_production: DF.Literal["Disabled", "Enabled"]
+		customer_rate_values_excel: DF.Table[CustomerRateValuesTable]
+		customer_sap_support: DF.Literal["Yes", "No"]
+		customer_spot_uv_rates: DF.Table[CustomerSpotUVRateTable]
+		customer_state: DF.Data | None
+		customer_test_cert_tds: DF.Literal["Disabled", "Enabled"]
 		customer_type: DF.Literal["Company", "Individual", "Proprietorship", "Partnership"]
 		default_bank_account: DF.Link | None
 		default_commission_rate: DF.Float
@@ -66,15 +104,20 @@ class Customer(TransactionBase):
 		industry: DF.Link | None
 		is_frozen: DF.Check
 		is_internal_customer: DF.Check
+		job_nature_default_options: DF.TableMultiSelect[JobNatureTable]
+		job_type_default_options: DF.TableMultiSelect[JobTypeTable]
 		language: DF.Link | None
 		lead_name: DF.Link | None
 		loyalty_program: DF.Link | None
 		loyalty_program_tier: DF.Data | None
 		market_segment: DF.Link | None
+		max_qa_iterations: DF.Int
 		mobile_no: DF.ReadOnly | None
+		multiple_qc: DF.Check
 		naming_series: DF.Literal["CUST-.YYYY.-"]
 		opportunity_name: DF.Link | None
 		payment_terms: DF.Link | None
+		plate_thickness_default_options: DF.TableMultiSelect[PlateThicknessTable]
 		portal_users: DF.Table[PortalUser]
 		primary_address: DF.Text | None
 		represents_company: DF.Link | None
