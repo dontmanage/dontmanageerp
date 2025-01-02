@@ -1,0 +1,27 @@
+# Copyright (c) 2024, DontManage and contributors
+# For license information, please see license.txt
+
+# import dontmanage
+from dontmanage.model.document import Document
+
+
+class AdvancePaymentLedgerEntry(Document):
+	# begin: auto-generated types
+	# This code is auto-generated. Do not modify anything in this block.
+
+	from typing import TYPE_CHECKING
+
+	if TYPE_CHECKING:
+		from dontmanage.types import DF
+
+		against_voucher_no: DF.DynamicLink | None
+		against_voucher_type: DF.Link | None
+		amount: DF.Currency
+		company: DF.Link | None
+		currency: DF.Link | None
+		event: DF.Data | None
+		voucher_no: DF.DynamicLink | None
+		voucher_type: DF.Link | None
+	# end: auto-generated types
+
+	pass

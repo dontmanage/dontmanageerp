@@ -1,0 +1,18 @@
+{
+  "name": "dontmanageerp",
+  "description": "Open Source ERP System powered by the DontManage Framework",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dontmanage/dontmanageerp.git"
+  },
+  "homepage": "https://dontmanageerp.com",
+  "author": "DontManage",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/dontmanage/dontmanageerp/issues"
+  },
+  "devDependencies": {},
+  "dependencies": {
+    "onscan.js": "^1.5.2"
+  }
+}

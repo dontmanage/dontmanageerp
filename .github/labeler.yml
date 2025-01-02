@@ -1,0 +1,55 @@
+accounts:
+- dontmanageerp/accounts/*
+- dontmanageerp/controllers/accounts_controller.py
+- dontmanageerp/controllers/taxes_and_totals.py
+
+stock:
+- dontmanageerp/stock/*
+- dontmanageerp/controllers/stock_controller.py
+- dontmanageerp/controllers/item_variant.py
+
+assets:
+- dontmanageerp/assets/*
+
+regional:
+- dontmanageerp/regional/*
+
+selling:
+- dontmanageerp/selling/*
+- dontmanageerp/controllers/selling_controller.py
+
+buying:
+- dontmanageerp/buying/*
+- dontmanageerp/controllers/buying_controller.py
+
+support:
+- dontmanageerp/support/*
+
+POS:
+- pos*
+
+ecommerce:
+- dontmanageerp/e_commerce/*
+
+maintenance:
+- dontmanageerp/maintenance/*
+
+manufacturing:
+- dontmanageerp/manufacturing/*
+
+crm:
+- dontmanageerp/crm/*
+
+HR:
+- dontmanageerp/hr/*
+
+payroll:
+- dontmanageerp/payroll*
+
+projects:
+- dontmanageerp/projects/*
+
+# Any python files modifed but no test files modified
+needs-tests:
+- any: ['dontmanageerp/**/*.py']
+  all: ['!dontmanageerp/**/test*.py']
